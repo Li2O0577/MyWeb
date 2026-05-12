@@ -1,0 +1,33 @@
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# 密钥/配置文件（绝对不能上传GitHub）
+.env
+.env.*
+!.env.example
+config.json
+secret.json
+
+# VSCode 编辑器配置
+.vscode/
+*.code-workspace
+
+# 日志文件
+logs/
+*.log
+log/
+
+# 系统垃圾文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
