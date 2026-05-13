@@ -260,7 +260,7 @@ with hp_col2:
 with hp_col3:
     epochs = st.slider("最大训练轮数", 20, 500, 100, 20)
 with hp_col4:
-    batch_size = st.selectbox("批次大小", [4, 8, 16, 32, 64, 128], index=2)
+    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32, 64, 128], index=2)
 
 val_split = st.slider("验证集比例", 0.1, 0.4, 0.2, 0.05)
 patience = st.slider("早停耐心 (轮)", 5, 50, 15, 5)
@@ -640,4 +640,4 @@ else:
 
             st.dataframe(result_df, use_container_width=True)
             csv = result_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)
+            st.download_button("📥 下载预测结果 CSV", csv, "predictions.csv", "text/csv", use_container_width=True)

@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 from pages._prepare import render_sidebar, data_uploader
 
 # 1. 配置页面，隐藏侧边栏导航 
-st.set_page_config(page_title="Data processing", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="数据处理", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(
 """
     <style>
@@ -14,7 +14,7 @@ st.markdown(
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/3_data_processing.py")
-st.title("🧹 Data processing")
+st.title("🧹 数据处理")
 
 # 2. 数据上传与预处理组件
 df = data_uploader()
@@ -28,7 +28,7 @@ if df is not None:
         st.session_state.original_df = df.copy()
 
 if df is None:
-    st.warning("请先在 Data Load 页面上传数据！")
+    st.warning("请先在数据加载页面上传数据！")
     st.stop()
 
 # 3. 数据处理选项
@@ -93,7 +93,7 @@ with st.expander("4. 标准化 / 归一化"):
     scale_cols = st.multiselect("选择数值列", df.select_dtypes(include=[np.number]).columns, key="scale_cols_1")
     method = st.radio("方法", ["StandardScaler (标准化)", "MinMaxScaler (归一化)"], key="scale_method_1")
     if st.button("执行缩放", key="btn_scale") and scale_cols:
-        scaler = StandardScaler() if method.startswith("S") else MinMaxScaler()
+        scaler = StandardScaler() if "Standard" in method else MinMaxScaler()
         df[scale_cols] = scaler.fit_transform(df[scale_cols])
         st.success("处理完成！")
 
@@ -118,9 +118,9 @@ with st.expander("6. 类别特征编码"):
         st.warning("当前无类别列！")
     else:
         cat_col = st.selectbox("选择类别列", cat_cols, key="cat_col_1")
-        encode_method = st.radio("编码方式", ["Label Encoding", "One-Hot Encoding"], key="encode_method_1")
+        encode_method = st.radio("编码方式", ["标签编码", "独热编码"], key="encode_method_1")
         if st.button("执行编码", key="btn_encode"):
-            if encode_method == "Label Encoding":
+            if encode_method == "标签编码":
                 df[cat_col] = LabelEncoder().fit_transform(df[cat_col])
             else:
                 ohe = OneHotEncoder(sparse_output=False, drop="first")

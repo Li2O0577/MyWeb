@@ -13,14 +13,14 @@ from sklearn.metrics import accuracy_score
 from pages._prepare import render_sidebar, data_uploader
 
 # 页面配置（统一风格）
-st.set_page_config(page_title="Decision Tree", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="决策树", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none;}
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/7_decision_tree.py")
-st.title("🌳 Decision Tree 决策树分类模型")
+st.title("🌳 决策树分类模型")
 
 # 统一模型保存路径
 MODEL_DIR = "models"
@@ -65,7 +65,7 @@ with col2:
     max_depth = st.number_input("决策树最大深度", min_value=2, max_value=10, value=3, step=1)
 with col3:
     # 划分标准：熵 / 基尼
-    criterion = st.selectbox("划分标准（杂质计算）", ["entropy", "gini"], index=0)
+    criterion = st.selectbox("划分标准", ["entropy", "gini"], index=0)
     st.info(f"✅ 数值特征：{len(numeric_cols)} 个 | 分类特征：{len(categorical_cols)} 个")
 
 # 特征列（排除目标列）
@@ -124,7 +124,7 @@ def show_tree_rules(model, feature_names):
             "节点ID": i,
             "划分特征": feature_names[tree_.feature[i]] if tree_.feature[i] != -2 else "叶子节点",
             "划分阈值": round(tree_.threshold[i], 4) if tree_.feature[i] != -2 else "-",
-            f"{criterion}值": round(tree_.impurity[i], 4),
+            f"{'信息熵' if criterion=='entropy' else '基尼系数'}值": round(tree_.impurity[i], 4),
             "样本数量": int(tree_.n_node_samples[i]),
             "节点类型": "内部节点" if tree_.children_left[i] != -1 else "叶子节点"
         })
@@ -230,4 +230,4 @@ else:
     if st.button("执行分类预测", use_container_width=True):
         input_df = pd.DataFrame(input_data)
         pred = model.predict(input_df)[0]
-        st.success(f"🎯 预测结果：目标列 = {pred}")
+        st.success(f"🎯 预测结果：{pred}")

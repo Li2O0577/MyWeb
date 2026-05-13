@@ -17,7 +17,7 @@ from pages._prepare import render_sidebar, data_uploader
 # 好多用的包。。
 
 # 1. 配置页面，隐藏侧边栏导航 
-st.set_page_config(page_title="Regression", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="回归预测", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(
 """
     <style>
@@ -25,7 +25,7 @@ st.markdown(
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/4_regression.py")
-st.title("🧠 Regression (Prediction)")
+st.title("🧠 回归预测")
 
 # 2. 数据上传与预处理组件
 MODEL_DIR = "models"
@@ -105,7 +105,7 @@ with hp_col1:
 with hp_col2:
     epochs = st.slider("最大训练轮数", 20, 500, 100, 20)
 with hp_col3:
-    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32, 64, 128], index=1)
+    batch_size = st.selectbox("批次大小", [4, 8, 16, 32, 64, 128], index=1)
 
 test_size = 0.2
 patience = 10  # 早停：10轮不提升就停止
@@ -238,7 +238,7 @@ with train_col:
 
                 # 进度条
                 progress_bar.progress((epoch + 1) / epochs)
-                status_text.text(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}")
+                status_text.text(f"轮次 {epoch+1}/{epochs} | 训练损失: {avg_train_loss:.4f} | 验证损失: {val_loss:.4f}")
 
                 # 早停判断
                 if val_loss < best_loss:
@@ -282,7 +282,7 @@ with train_col:
             fig = go.Figure()
             fig.add_trace(go.Scatter(y=train_losses, mode='lines', name='训练损失', line=dict(color='#1f77b4')))
             fig.add_trace(go.Scatter(y=val_losses, mode='lines', name='验证损失', line=dict(color='#ff7f0e')))
-            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="Epoch", yaxis_title="Loss (MSE)",
+            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="训练轮次", yaxis_title="损失值 (MSE)",
                               template="plotly_white", height=350, margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -328,7 +328,7 @@ else:
 
     # 批量预测
     st.divider()
-    st.subheader("📦 批量预测 (CSV)")
+    st.subheader("📦 批量预测")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="reg_batch")
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
@@ -347,4 +347,4 @@ else:
             result_df[f"预测_{target}"] = batch_pred
             st.dataframe(result_df, use_container_width=True)
             csv = result_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载预测结果 CSV", csv, "predictions.csv", "text/csv", use_container_width=True)
+            st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)

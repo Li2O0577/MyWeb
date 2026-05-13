@@ -15,7 +15,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from pages._prepare import render_sidebar, data_uploader
 
 # 页面配置
-st.set_page_config(page_title="Classification", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="分类决策", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(
 """
     <style>
@@ -23,7 +23,7 @@ st.markdown(
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/5_classification.py")
-st.title("🧠 Classification (Decision Model)")
+st.title("🧠 分类决策")
 
 # 模型保存路径
 MODEL_DIR = "models"
@@ -118,7 +118,7 @@ with hp_col1:
 with hp_col2:
     epochs = st.slider("最大训练轮数", 20, 500, 100, 20)
 with hp_col3:
-    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32, 64, 128], index=1)
+    batch_size = st.selectbox("批次大小", [4, 8, 16, 32, 64, 128], index=1)
 
 test_size = 0.2
 patience = 10
@@ -278,7 +278,7 @@ with train_col:
                 val_losses.append(val_loss)
 
                 progress_bar.progress((epoch + 1) / epochs)
-                status_text.text(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}")
+                status_text.text(f"轮次 {epoch+1}/{epochs} | 训练损失: {avg_train_loss:.4f} | 验证损失: {val_loss:.4f}")
 
                 if val_loss < best_loss:
                     best_loss = val_loss
@@ -313,18 +313,18 @@ with train_col:
 
             col_cm, col_report = st.columns([1, 1])
             with col_cm:
-                st.caption("**混淆矩阵**")
+                st.caption("混淆矩阵")
                 fig_cm = go.Figure(data=go.Heatmap(
                     z=cm, x=label_names, y=label_names,
                     text=cm, texttemplate="%{text}", textfont=dict(size=14),
                     colorscale="Blues", showscale=False
                 ))
-                fig_cm.update_layout(xaxis_title="预测", yaxis_title="实际",
+                fig_cm.update_layout(xaxis_title="预测值", yaxis_title="实际值",
                                      height=300, margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig_cm, use_container_width=True)
 
             with col_report:
-                st.caption("**分类报告**")
+                st.caption("分类报告")
                 try:
                     report = classification_report(y_test, y_pred, target_names=[str(n) for n in label_names],
                                                    output_dict=True, zero_division=0)
@@ -340,7 +340,7 @@ with train_col:
             fig = go.Figure()
             fig.add_trace(go.Scatter(y=train_losses, mode='lines', name='训练损失', line=dict(color='#1f77b4')))
             fig.add_trace(go.Scatter(y=val_losses, mode='lines', name='验证损失', line=dict(color='#ff7f0e')))
-            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="Epoch", yaxis_title="Loss",
+            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="训练轮次", yaxis_title="损失值",
                               template="plotly_white", height=350, margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -422,7 +422,7 @@ else:
 
     # 批量预测
     st.divider()
-    st.subheader("📦 批量预测 (CSV)")
+    st.subheader("📦 批量预测")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="cls_batch")
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
@@ -452,4 +452,4 @@ else:
             result_df["置信度"] = confidences
             st.dataframe(result_df, use_container_width=True)
             csv = result_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载预测结果 CSV", csv, "predictions.csv", "text/csv", use_container_width=True)
+            st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)

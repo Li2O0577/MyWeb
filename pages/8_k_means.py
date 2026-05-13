@@ -11,14 +11,14 @@ import matplotlib.pyplot as plt
 from pages._prepare import render_sidebar, data_uploader
 
 # 页面配置
-st.set_page_config(page_title="KMeans Clustering", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="K-means 聚类", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none;}
     </style>
 """, unsafe_allow_html=True)
-render_sidebar("pages/6_kmeans.py")
-st.title("📊 K-Means Clustering (无监督聚类)")
+render_sidebar("pages/8_k_means.py")
+st.title("📊 K-means 聚类")
 
 # 模型保存路径（统一存放）
 MODEL_DIR = "models"
@@ -177,14 +177,14 @@ if "cluster_data" in st.session_state:
 
     fig, ax = plt.subplots(figsize=(8, 5))
     scatter = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=data["聚类标签"], cmap="viridis", s=50)
-    ax.set_title(f"KMeans 聚类可视化 (K={k})")
-    ax.set_xlabel("PCA 1")
-    ax.set_ylabel("PCA 2")
+    ax.set_title(f"K-means 聚类可视化 (K={k})")
+    ax.set_xlabel("主成分 1")
+    ax.set_ylabel("主成分 2")
     plt.colorbar(scatter, label="簇标签")
     st.pyplot(fig)
 
 #  聚类预测 
-st.subheader("🎯 新数据聚类预测")
+st.subheader("🎯 聚类预测")
 if "kmeans_model" not in st.session_state:
     st.warning("请先训练 KMeans 模型！")
 else:

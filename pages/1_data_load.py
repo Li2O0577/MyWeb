@@ -3,14 +3,14 @@ import pandas as pd
 from pages._prepare import data_uploader, render_sidebar, detect_outliers
 
 # 1. 配置页面
-st.set_page_config(page_title="Data Load", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="数据加载", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none;}
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/1_data_load.py")
-st.title("📊 Data Load")
+st.title("📊 数据加载")
 
 # 2. 数据上传（修复过的数据用持久标记跳过文件重读）
 df = data_uploader(
@@ -28,12 +28,12 @@ if df is not None:
 
         st.divider()
         with st.expander(
-            f"⚠️ Outlier Detection — {total_outliers} outliers across {n_cols} column(s)",
+            f"⚠️ 异常值检测 — {total_outliers} 个异常值分布在 {n_cols} 列",
             expanded=True,
         ):
             st.markdown(
-                f"Detected using **IQR method** (Q1 − 1.5×IQR, Q3 + 1.5×IQR). "
-                f"**{total_outliers}** outlier value(s) found in **{n_cols}** numeric column(s)."
+                f"使用 **IQR 方法** (Q1 − 1.5×IQR, Q3 + 1.5×IQR) 检测。"
+                f"在 **{n_cols}** 个数值列中发现 **{total_outliers}** 个异常值。"
             )
 
             for idx, (col, info) in enumerate(outlier_info.items()):
@@ -41,13 +41,13 @@ if df is not None:
 
                 st.markdown(f"### 📌 Column: `{col}`")
                 st.caption(
-                    f"{info['count']} outliers · "
-                    f"Bounds: [{info['lower_bound']}, {info['upper_bound']}]"
+                    f"{info['count']} 个异常值 · "
+                    f"边界: [{info['lower_bound']}, {info['upper_bound']}]"
                 )
 
                 # 异常行表格
                 outlier_df = pd.DataFrame(
-                    {"Row Index": info["indices"], "Value": info["values"]}
+                    {"行号": info["indices"], "异常值": info["values"]}
                 )
                 st.dataframe(outlier_df, use_container_width=True)
 
@@ -62,7 +62,7 @@ if df is not None:
 
                 with c1:
                     if st.button(
-                        "🔒 Winsorize (clamp to bounds)",
+                        "🔒 缩尾处理（截断到边界）",
                         key=f"win_{col_key}",
                         use_container_width=True,
                     ):
@@ -75,7 +75,7 @@ if df is not None:
 
                 with c2:
                     if st.button(
-                        f"📊 Replace with Mean ({mean_val:.2f})",
+                        f"📊 替换为均值 ({mean_val:.2f})",
                         key=f"mean_{col_key}",
                         use_container_width=True,
                     ):
@@ -86,7 +86,7 @@ if df is not None:
 
                 with c3:
                     if st.button(
-                        f"📈 Replace with Median ({median_val:.2f})",
+                        f"📈 替换为中位数 ({median_val:.2f})",
                         key=f"med_{col_key}",
                         use_container_width=True,
                     ):
@@ -97,7 +97,7 @@ if df is not None:
 
                 with c4:
                     if st.button(
-                        f"🗑️ Drop {info['count']} row(s)",
+                        f"🗑️ 删除 {info['count']} 行",
                         key=f"drop_{col_key}",
                         use_container_width=True,
                     ):
@@ -109,7 +109,7 @@ if df is not None:
                 st.divider()
 
     # 4. 数据预览
-    st.subheader("📋 Data Preview")
+    st.subheader("📋 数据预览")
     st.dataframe(df, use_container_width=True)
 
 # 5. 状态说明
@@ -117,4 +117,4 @@ st.divider()
 if df is None:
     st.info("请先上传数据，才能进行后续的可视化、处理和建模等操作（支持 CSV 和 Excel）。")
 else:
-    st.success("数据加载成功！你现在可以导航到其他页面进行可视化、处理或建模。")
+    st.success("数据加载成功！可导航到其他页面进行可视化、处理或建模。")

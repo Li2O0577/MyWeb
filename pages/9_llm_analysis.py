@@ -5,14 +5,14 @@ import requests
 from pages._prepare import render_sidebar, data_uploader
 
 # 1. 配置页面
-st.set_page_config(page_title="LLM Analysis", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="大模型分析", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none;}
     </style>
 """, unsafe_allow_html=True)
 render_sidebar("pages/9_llm_analysis.py")
-st.title("🤖 LLM Analysis")
+st.title("🤖 大模型分析")
 
 # 2. 数据上传
 df = data_uploader()
@@ -115,23 +115,23 @@ def build_data_summary(df):
 
 # 3. 分析模式选择
 st.divider()
-st.subheader("🔀 Analysis Mode")
+st.subheader("🔀 分析模式")
 
 mode = st.radio(
-    "Choose how to interact with the LLM:",
+    "选择与 LLM 的交互方式：",
     [
-        "📊 Smart Mode — Send data summary, let AI recommend analyses using platform skills",
-        "📄 Direct Mode — Send raw data directly to AI (higher token cost)"
+        "📊 智能模式 — 发送数据摘要，让 AI 推荐平台分析工具",
+        "📄 直接模式 — 发送原始数据给 AI（消耗更多 Token）"
     ],
     index=0,
-    help="Smart: low token cost, AI recommends which platform tools to use. Direct: full data sent, AI can do custom analysis."
+    help="智能：低 Token 成本，AI 推荐使用平台上的分析工具。直接：发送完整数据，AI 可做自定义分析。"
 )
 
 is_smart = mode.startswith("📊")
 
 # 4. API 配置
 st.divider()
-st.subheader("⚙️ API Configuration")
+st.subheader("⚙️ API 配置")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
@@ -159,7 +159,7 @@ st.caption("支持所有兼容 OpenAI API 格式的服务（DeepSeek、通义千
 
 # 5. Prompt 输入
 st.divider()
-st.subheader("💬 Prompt")
+st.subheader("💬 提示词")
 
 if is_smart:
     default_system = SKILL_INFO
@@ -173,13 +173,13 @@ else:
 col1, col2 = st.columns(2)
 with col1:
     system_prompt = st.text_area(
-        "System Prompt",
+        "系统提示词",
         value=default_system,
         height=200 if is_smart else 120
     )
 with col2:
     user_prompt = st.text_area(
-        "User Prompt",
+        "用户提示词",
         value=default_user,
         height=200 if is_smart else 120,
         help=user_help
@@ -188,16 +188,16 @@ with col2:
 # Direct 模式专属：数据包含选项
 if not is_smart:
     if df is not None:
-        with st.expander("📋 Data Preview & Context Settings", expanded=False):
+        with st.expander("📋 数据预览与上下文设置", expanded=False):
             st.dataframe(df.head(10), use_container_width=True)
             st.caption(f"Data shape: {df.shape[0]} rows × {df.shape[1]} columns")
 
             col1, col2 = st.columns(2)
             with col1:
                 max_rows = st.slider(
-                    "包含数据行数（过多可能超出 token 限制）",
+                    "包含数据行数（过多可能超出 Token 限制）",
                     0, min(100, len(df)), min(20, len(df)),
-                    help="0 表示不包含数据，仅发送 prompt"
+                    help="0 表示不包含数据，仅发送提示词"
                 )
             with col2:
                 col_subset = st.multiselect(
@@ -213,17 +213,17 @@ if not is_smart:
 st.divider()
 col_btn, col_info = st.columns([1, 4])
 with col_btn:
-    send_label = "🚀 Analyze (Smart)" if is_smart else "🚀 Send"
+    send_label = "🚀 分析（智能）" if is_smart else "🚀 发送"
     send_btn = st.button(send_label, type="primary", use_container_width=True)
 with col_info:
     if is_smart and df is not None:
-        st.caption(f"💡 Smart mode: only data summary (~{len(df.columns)} cols × stats) will be sent, saving tokens")
+        st.caption(f"💡 智能模式：仅发送数据摘要（约 {len(df.columns)} 列的统计信息），节省 Token")
 
 if send_btn:
     if not api_key:
-        st.error("Please enter your API Key.")
+        st.error("请输入 API Key。")
     elif not model:
-        st.error("Please enter a model name.")
+        st.error("请输入模型名称。")
     else:
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -245,7 +245,7 @@ if send_btn:
 
         messages.append({"role": "user", "content": full_content})
 
-        with st.spinner("Waiting for LLM response..."):
+        with st.spinner("等待 LLM 回复中..."):
             try:
                 resp = requests.post(
                     f"{api_base.rstrip('/')}/chat/completions",
@@ -266,47 +266,47 @@ if send_btn:
                     reply = data["choices"][0]["message"]["content"]
 
                     st.divider()
-                    st.subheader("📝 Response")
+                    st.subheader("📝 回复")
                     st.markdown(reply)
 
                     usage = data.get("usage", {})
                     if usage:
-                        with st.expander("📊 Token Usage", expanded=False):
+                        with st.expander("📊 Token 用量", expanded=False):
                             c1, c2, c3 = st.columns(3)
-                            c1.metric("Prompt Tokens", usage.get("prompt_tokens", "N/A"))
-                            c2.metric("Completion Tokens", usage.get("completion_tokens", "N/A"))
-                            c3.metric("Total Tokens", usage.get("total_tokens", "N/A"))
+                            c1.metric("提示词 Token", usage.get("prompt_tokens", "N/A"))
+                            c2.metric("回复 Token", usage.get("completion_tokens", "N/A"))
+                            c3.metric("总计 Token", usage.get("total_tokens", "N/A"))
                 else:
-                    st.error(f"API Error [{resp.status_code}]: {resp.text}")
+                    st.error(f"API 错误 [{resp.status_code}]: {resp.text}")
 
             except requests.exceptions.Timeout:
-                st.error("Request timeout. Please try with a shorter prompt.")
+                st.error("请求超时，请缩短提示词后重试。")
             except requests.exceptions.ConnectionError:
-                st.error(f"Connection failed. Please check your API Base URL: {api_base}")
+                st.error(f"连接失败，请检查 API 地址：{api_base}")
             except Exception as e:
-                st.error(f"Unexpected error: {e}")
+                st.error(f"未知错误：{e}")
 
 # 7. 使用说明
 st.divider()
-with st.expander("📖 Instructions", expanded=False):
+with st.expander("📖 使用说明", expanded=False):
     st.markdown("""
-    **Smart Mode (Recommended):**
-    1. Upload your data
-    2. Fill in your API configuration
-    3. The AI receives only data summary (stats, correlations, column info) — no raw rows
-    4. AI recommends which platform tools to use and what to look for
-    5. Much lower token cost, results focused on actionable next steps
+    **智能模式（推荐）：**
+    1. 上传数据
+    2. 填写 API 配置
+    3. AI 仅接收数据摘要（统计量、相关性、列信息），不接收原始行数据
+    4. AI 推荐使用平台的哪些分析工具及关注点
+    5. Token 成本更低，结果聚焦于可执行的下一步操作
 
-    **Direct Mode:**
-    1. Upload your data
-    2. Fill in your API configuration
-    3. Write your prompt — raw data is included as context
-    4. Good for custom analysis that requires the AI to read actual values
+    **直接模式：**
+    1. 上传数据
+    2. 填写 API 配置
+    3. 编写提示词 — 原始数据将作为上下文发送
+    4. 适合需要 AI 读取实际数值的自定义分析
 
-    **Supported platforms:**
-    - OpenAI (GPT-4o, GPT-4, etc.)
+    **支持的平台：**
+    - OpenAI (GPT-4o, GPT-4 等)
     - DeepSeek
-    - Qwen (通义千问)
-    - Zhipu (智谱 GLM)
-    - Any other OpenAI-compatible API
+    - 通义千问 (Qwen)
+    - 智谱 GLM (Zhipu)
+    - 其他兼容 OpenAI API 的服务
     """)

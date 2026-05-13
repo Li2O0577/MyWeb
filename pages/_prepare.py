@@ -50,8 +50,8 @@ def data_uploader(warn_outliers=True, force_cached=False):
     if "original_df" not in st.session_state:
         st.session_state.original_df = None
 
-    st.subheader("📂 Data Input")
-    uploaded_file = st.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"], key="global_uploader")
+    st.subheader("📂 数据导入")
+    uploaded_file = st.file_uploader("上传 CSV/Excel", type=["csv", "xlsx"], key="global_uploader")
 
     if uploaded_file is not None:
         current_name = uploaded_file.name
@@ -97,13 +97,13 @@ def data_uploader(warn_outliers=True, force_cached=False):
                     cols = len(outlier_info)
                     st.warning(
                         f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                        f"建议前往 **📊 Data Load** 页面查看详情并进行处理。"
+                        f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
                     )
 
                 return df
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"错误：{e}")
                 return None
 
         # force_cached 或 _data_cleaned：使用缓存数据
@@ -116,7 +116,7 @@ def data_uploader(warn_outliers=True, force_cached=False):
                 cols = len(outlier_info)
                 st.warning(
                     f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                    f"建议前往 **📊 Data Load** 页面查看详情并进行处理。"
+                    f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
                 )
             return df
 
@@ -130,7 +130,7 @@ def data_uploader(warn_outliers=True, force_cached=False):
             cols = len(outlier_info)
             st.warning(
                 f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                f"建议前往 **📊 Data Load** 页面查看详情并进行处理。"
+                f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
             )
         return df
 
@@ -140,19 +140,19 @@ def data_uploader(warn_outliers=True, force_cached=False):
 def render_sidebar(current_path):
     hide_native_sidebar()
     with st.sidebar:
-        st.title("🧭 Navigation")
+        st.title("🧭 导航")
         st.divider()
 
         pages = [
-            ("📊 Data Load", "pages/1_data_load.py"),
-            ("📈 Data Visualization", "pages/2_data_visualization.py"),
-            ("🧹 Data Processing", "pages/3_data_processing.py"),
-            ("🧠 Regression", "pages/4_regression.py"),
-            ("🔮 Classification", "pages/5_classification.py"),
-            ("🛠️ DIY MLP", "pages/6_diy_mlp.py"),
-            ("🌳 Decision Tree", "pages/7_decision_tree.py"),
-            ("🧪 K-means", "pages/8_k_means.py"),
-            ("🤖 LLM Analysis", "pages/9_llm_analysis.py"),
+            ("📊 数据加载", "pages/1_data_load.py"),
+            ("📈 数据可视化", "pages/2_data_visualization.py"),
+            ("🧹 数据处理", "pages/3_data_processing.py"),
+            ("🧠 回归预测", "pages/4_regression.py"),
+            ("🔮 分类决策", "pages/5_classification.py"),
+            ("🛠️ 自定义 MLP", "pages/6_diy_mlp.py"),
+            ("🌳 决策树", "pages/7_decision_tree.py"),
+            ("🧪 K-means 聚类", "pages/8_k_means.py"),
+            ("🤖 大模型分析", "pages/9_llm_analysis.py"),
         ]
 
         # 循环渲染按钮（自动判断高亮+禁用点击）
@@ -172,7 +172,7 @@ def render_sidebar(current_path):
         st.divider()
 
         # 返回主页按钮
-        if st.button("🏠 Back to Home", use_container_width=True):
+        if st.button("🏠 返回首页", use_container_width=True):
             st.switch_page("main.py")
         st.divider()
-        st.caption("Indeterminate | Data Analysis Platform")
+        st.caption("Indeterminate | 数据分析平台")
