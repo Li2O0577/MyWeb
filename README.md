@@ -6,7 +6,7 @@
 
 | 模块 | 说明 |
 |------|------|
-| 📊 Data Load | 上传 CSV/Excel 数据，快速预览与预处理 |
+| 📊 Data Load | 上传 CSV/Excel 数据，预览、IQR 异常值检测与修复 |
 | 📈 Data Visualization | 使用 Matplotlib / Seaborn / Plotly 绘制图表 |
 | 🧹 Data Processing | 数据清洗、特征缩放、PCA 降维等 |
 | 🧠 Regression | 基于 PyTorch MLP 的回归分析 |
@@ -14,7 +14,7 @@
 | 🛠️ DIY MLP | 自定义 MLP 网络结构（层数、神经元、激活函数） |
 | 🌳 Decision Tree | 决策树分类器训练与规则导出 |
 | 🧪 K-means | K-means 聚类分析 |
-| 🤖 LLM Analysis | 调用大模型 API（OpenAI 兼容）进行智能数据分析 |
+| 🤖 LLM Analysis | 调用大模型 API，支持 Smart（摘要分析）/ Direct（原始数据）双模式 |
 
 ## 环境要求
 
@@ -89,7 +89,9 @@ streamlit run main.py
 ## 使用提示
 
 - 各页面通过 `📂 Data Input` 组件共享数据：在上一个页面上传后，切换到其他页面无需重复上传
-- LLM Analysis 支持所有兼容 OpenAI API 格式的服务（OpenAI、DeepSeek、通义千问、智谱等）
+- Data Load 页面内置 **IQR 异常值检测**，支持 Winsorize / 均值替换 / 中位数替换 / 删除行等修复方式
+- 其他页面会自动提示异常值数量，引导用户前往 Data Load 页面处理
+- LLM Analysis 的 Smart 模式只发送数据摘要（统计量+相关性），大幅节省 token；Direct 模式保留原始行为
 - 深度学习模块建议使用 GPU 加速，CPU 训练速度较慢
 
 ---
