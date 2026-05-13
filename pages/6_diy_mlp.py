@@ -7,362 +7,637 @@ import torch.optim as optim
 import os
 import pickle
 import json
+import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, accuracy_score
 from torch.utils.data import TensorDataset, DataLoader
 from pages._prepare import render_sidebar, data_uploader
 
-#  页面基础配置 
-st.set_page_config(page_title="Classification", layout="wide", initial_sidebar_state="collapsed")
-# 隐藏侧边栏导航栏
-st.markdown(
-"""
+# 1. Page config
+st.set_page_config(page_title="DIY MLP", layout="wide", initial_sidebar_state="collapsed")
+st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none;}
     </style>
 """, unsafe_allow_html=True)
-render_sidebar("pages/5_classification.py")
-st.title("🧠 Classification (Decision Model)")
+render_sidebar("pages/6_diy_mlp.py")
+st.title("🛠️ DIY MLP (自定义神经网络)")
 
-# 模型存储配置 
+# 模型文件路径
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
-# 分类模型相关路径
-MODEL_PATH = os.path.join(MODEL_DIR, "cls_best_model.pth")
-SCALER_PATH = os.path.join(MODEL_DIR, "cls_scaler.pkl")
-CONFIG_PATH = os.path.join(MODEL_DIR, "cls_config.json")
+MODEL_PATH = os.path.join(MODEL_DIR, "diy_best_model.pth")
+SCALER_PATH = os.path.join(MODEL_DIR, "diy_scaler.pkl")
+CONFIG_PATH = os.path.join(MODEL_DIR, "diy_config.json")
 
+# 2. 设备选择
 st.subheader("⚙️ 计算设备选择")
-device_col1, device_col2 = st.columns(2)
-with device_col1:
-    device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
-# 设备校验逻辑（完全匹配分类页面，不符合立即报错）
+device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
 if device_choice == "CUDA (GPU)":
     if not torch.cuda.is_available():
-        st.error("❌ 设备选择错误：当前环境未安装CUDA/GPU，无法使用CUDA！请切换为CPU")
+        st.error("❌ 当前环境未安装 CUDA，无法使用 GPU！请切换为 CPU")
         st.stop()
     device = torch.device("cuda")
     st.success("✅ 已启用：CUDA GPU")
 else:
     device = torch.device("cpu")
     st.info("⚙️ 已启用：CPU")
-    
-# 功能说明 
-with st.expander("📢 功能介绍", expanded=True):
+
+# 3. 功能介绍
+with st.expander("📢 功能介绍", expanded=False):
     st.markdown("""
-    ### 智能神经网络分类决策模型
-    1. **任务场景**：二分类/多分类任务（标签判断、类别决策、结果分类等）
-    2. **自适应设计**：自动识别类别数，适配Sigmoid(二分类)/Softmax(多分类)激活函数
-    3. **防过拟合策略**：自适应网络结构 + Dropout + 早停机制 + L2正则化
-    4. **硬件兼容**：全平台CPU适配，无环境依赖问题
-    5. **模型持久化**：训练后自动保存，重启页面自动加载，无需重复训练
+    ### 自定义神经网络构建器
+    1. **自由设计**：自行添加隐藏层，设定每层神经元数、激活函数、批归一化、Dropout
+    2. **双任务支持**：回归预测 + 分类决策，自动适配输出层与损失函数
+    3. **智能警告**：自动分析参数量与数据规模的匹配度，提示过拟合/欠拟合风险
+    4. **防过拟合**：早停机制 + L2 正则化 + Dropout
+    5. **模型持久化**：训练后自动保存，重启自动加载
     """)
 
-# 数据加载与校验 
+# 4. 数据加载
 df = data_uploader()
 if df is None:
-    st.warning("⚠️ 请先上传数据文件！")
+    st.warning("⚠️ 请先上传数据！")
     st.stop()
 
-# 数据预处理：仅保留数值列 + 剔除缺失值
 numeric_df = df.select_dtypes(include=[np.number]).dropna()
-# 基础数据校验
 if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
-    st.error("❌ 数据格式无效！要求：至少2列数值型数据 + 不少于10行有效数据")
+    st.error("❌ 数据无效！需要至少 2 列数值 + 10 行数据")
     st.stop()
 
-# 统一列名类型（兼容int/str混合列名场景）
-col_dtype = type(numeric_df.columns[0])
-col_options = [col for col in numeric_df.columns]
+numeric_df.columns = numeric_df.columns.astype(str)
+all_num_cols = list(numeric_df.columns)
 
-# 数据自动分析与模型配置 
-st.subheader("📊 数据自动分析与模型配置")
-col1, col2 = st.columns(2)
+# 5. 任务类型 & 目标列选择
+st.subheader("📊 任务配置")
+task_col1, task_col2 = st.columns(2)
+with task_col1:
+    task_type = st.selectbox("任务类型", ["回归 (Regression)", "分类 (Classification)"], index=0)
+with task_col2:
+    target_col = st.selectbox("选择目标列", all_num_cols, index=len(all_num_cols) - 1)
 
-with col1:
-    # 目标列/特征列选择
-    target_col = st.selectbox("选择分类目标列（y）", col_options, index=len(col_options)-1)
-    feature_cols = [col for col in col_options if col != target_col]
-    # 基础数据维度统计
-    n_features = len(feature_cols)
-    n_samples = len(numeric_df)
+feature_cols = [c for c in all_num_cols if c != target_col]
+n_features = len(feature_cols)
+n_samples = len(numeric_df)
+
+if task_type == "分类 (Classification)":
     n_classes = len(numeric_df[target_col].unique())
-    
-    # 合法性校验
-    if n_features == 0:
-        st.warning("⚠️ 目标列覆盖所有列！无可用特征列，请重新选择目标列")
-        st.stop()
     if n_classes < 2:
-        st.warning(f"⚠️ 目标列「{target_col}」仅包含{n_classes}个类别，无法执行分类任务！")
+        st.error("❌ 目标列类别数 < 2，无法分类！")
         st.stop()
     if n_classes > n_samples * 0.5:
-        st.warning(f"⚠️ 类别数({n_classes})接近样本数({n_samples})，易引发过拟合！建议更换目标列")
-    
-    # 数据维度信息展示
-    st.info(f"✅ 数据概览：{n_samples} 行 | {n_features} 个特征 | {n_classes} 个类别")
+        st.warning(f"⚠️ 类别数 ({n_classes}) 接近样本数 ({n_samples})，容易过拟合")
+    st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征 | {n_classes} 类别")
+else:
+    n_classes = None
+    st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征")
 
-with col2:
-    # 自适应网络结构设计（根据样本量动态调整）
-    if n_samples < 500:
-        hidden1, hidden2 = max(8, n_features), max(4, n_features//2)
-        dropout_rate = 0.1
-    elif n_samples < 5000:
-        hidden1, hidden2 = n_features*2, n_features
-        dropout_rate = 0.2
+# 6. 网络结构构建器
+st.subheader("🧱 网络结构设计")
+st.caption("自定义隐藏层。输入层和输出层会根据数据和任务自动生成。")
+
+# 初始化 session_state 存储层配置
+if "diy_layers" not in st.session_state:
+    st.session_state.diy_layers = [
+        {"neurons": max(8, n_features * 2), "activation": "ReLU", "bn": False, "dropout": 0.0}
+    ]
+
+# 激活函数选项
+ACT_OPTIONS = ["ReLU", "LeakyReLU", "GELU", "Tanh", "Sigmoid", "ELU", "SELU", "无激活"]
+
+def get_activation(name):
+    """根据名称返回激活层"""
+    if name == "ReLU":
+        return nn.ReLU()
+    elif name == "LeakyReLU":
+        return nn.LeakyReLU(0.1)
+    elif name == "GELU":
+        return nn.GELU()
+    elif name == "Tanh":
+        return nn.Tanh()
+    elif name == "Sigmoid":
+        return nn.Sigmoid()
+    elif name == "ELU":
+        return nn.ELU()
+    elif name == "SELU":
+        return nn.SELU()
     else:
-        hidden1, hidden2 = n_features*3, n_features*2
-        dropout_rate = 0.3
+        return nn.Identity()
 
-# 训练超参数 
-test_size = 0.2    # 测试集比例
-epochs = 100       # 最大训练轮数
-patience = 10      # 早停耐心值
+# 显示现有层
+layer_cols = st.columns([3, 1, 1, 1, 0.8])
+with layer_cols[0]:
+    st.caption("**神经元数**")
+with layer_cols[1]:
+    st.caption("**激活函数**")
+with layer_cols[2]:
+    st.caption("**BatchNorm**")
+with layer_cols[3]:
+    st.caption("**Dropout**")
+with layer_cols[4]:
+    st.caption("**操作**")
 
-#  分类模型定义（MLP） 
-class ClassificationNet(nn.Module):
-    def __init__(self, input_dim, h1, h2, dropout_rate, num_classes):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, h1),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(h1, h2),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(h2, num_classes)
+layers_to_remove = []
+
+for i, layer in enumerate(st.session_state.diy_layers):
+    cols = st.columns([3, 1, 1, 1, 0.8])
+    with cols[0]:
+        layer["neurons"] = st.number_input(
+            f"隐藏层 {i+1}", min_value=1, max_value=2048,
+            value=layer["neurons"], step=1, key=f"neurons_{i}"
         )
-        # 激活函数自适应
-        self.activation = nn.Sigmoid() if num_classes == 2 else nn.Softmax(dim=1)
+    with cols[1]:
+        layer["activation"] = st.selectbox(
+            "激活", ACT_OPTIONS,
+            index=ACT_OPTIONS.index(layer["activation"]) if layer["activation"] in ACT_OPTIONS else 0,
+            key=f"act_{i}", label_visibility="collapsed"
+        )
+    with cols[2]:
+        layer["bn"] = st.checkbox("BN", value=layer["bn"], key=f"bn_{i}")
+    with cols[3]:
+        layer["dropout"] = st.slider(
+            "Dropout", 0.0, 0.8, layer["dropout"], 0.05, key=f"drop_{i}",
+            label_visibility="collapsed"
+        )
+    with cols[4]:
+        if st.button("🗑️", key=f"del_{i}", use_container_width=True):
+            layers_to_remove.append(i)
+
+# 处理删除
+for i in sorted(layers_to_remove, reverse=True):
+    if len(st.session_state.diy_layers) > 1:
+        st.session_state.diy_layers.pop(i)
+
+# 添加/清空按钮
+btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 3])
+with btn_col1:
+    if st.button("➕ 添加隐藏层", use_container_width=True):
+        prev_neurons = st.session_state.diy_layers[-1]["neurons"]
+        st.session_state.diy_layers.append({
+            "neurons": max(2, prev_neurons // 2),
+            "activation": "ReLU",
+            "bn": False,
+            "dropout": 0.0
+        })
+        st.rerun()
+with btn_col2:
+    if st.button("🔄 重置", use_container_width=True):
+        st.session_state.diy_layers = [
+            {"neurons": max(8, n_features * 2), "activation": "ReLU", "bn": False, "dropout": 0.0}
+        ]
+        st.rerun()
+
+# 7. 模型摘要 & 自适应警告
+st.subheader("📐 网络结构摘要")
+
+# 计算参数量
+layer_dims = [n_features]
+for layer in st.session_state.diy_layers:
+    layer_dims.append(layer["neurons"])
+if task_type == "回归 (Regression)":
+    layer_dims.append(1)
+else:
+    layer_dims.append(n_classes)
+
+total_params = 0
+for i in range(len(layer_dims) - 1):
+    w_params = layer_dims[i] * layer_dims[i+1]  # weights
+    b_params = layer_dims[i+1]  # bias
+    bn_params = 2 * layer_dims[i+1] if (i < len(st.session_state.diy_layers) and st.session_state.diy_layers[i]["bn"]) else 0
+    total_params += w_params + b_params + bn_params
+
+# 显示结构图
+arch_parts = [f"Input({n_features})"]
+for i, layer in enumerate(st.session_state.diy_layers):
+    extras = []
+    if layer["bn"]:
+        extras.append("BN")
+    if layer["dropout"] > 0:
+        extras.append(f"Drop({layer['dropout']:.1f})")
+    extra_str = " + " + " + ".join(extras) if extras else ""
+    arch_parts.append(f"Dense({layer['neurons']}) + {layer['activation']}{extra_str}")
+if task_type == "回归 (Regression)":
+    arch_parts.append(f"Output(1) [Linear]")
+else:
+    arch_parts.append(f"Output({n_classes}) [Logits]")
+
+st.code("  →  ".join(arch_parts), language=None)
+st.caption(f"总参数量：**{total_params:,}**  |  训练样本：**{n_samples}**  |  参数量/样本比：**{total_params / max(n_samples, 1):.2f}**")
+
+# 自适应警告
+warnings = []
+if total_params > n_samples * 2:
+    warnings.append(f"🔴 **严重过拟合风险**：参数量 ({total_params:,}) 远超训练样本数 ({n_samples}) 的两倍。建议减少神经元数或层数，或增加数据量。")
+elif total_params > n_samples * 0.5:
+    warnings.append(f"🟡 **过拟合风险**：参数量 ({total_params:,}) 超过训练样本数 ({n_samples}) 的一半。建议增加 Dropout 或减少参数。")
+elif total_params < max(8, n_features):
+    warnings.append(f"🟡 **欠拟合风险**：参数量 ({total_params:,}) 过少，可能无法充分学习。建议增加神经元数或层数。")
+
+# 检查消失梯度风险
+sigmoid_tanh_count = sum(1 for l in st.session_state.diy_layers if l["activation"] in ("Sigmoid", "Tanh"))
+if sigmoid_tanh_count >= 3:
+    warnings.append(f"🟡 **梯度消失风险**：{sigmoid_tanh_count} 层使用 Sigmoid/Tanh，深层网络容易出现梯度消失。建议改用 ReLU/GELU。")
+
+# 纯线性检查（所有层都无激活）
+no_act_count = sum(1 for l in st.session_state.diy_layers if l["activation"] == "无激活")
+if no_act_count == len(st.session_state.diy_layers):
+    warnings.append(f"🟡 **等效线性模型**：所有隐藏层无激活函数，整个网络退化为线性回归。建议添加非线性激活。")
+
+for w in warnings:
+    st.warning(w)
+
+if not warnings:
+    st.success("✅ 网络规模与数据量匹配良好，可以开始训练。")
+
+# 8. 训练参数
+st.subheader("⚡ 训练参数")
+hp_col1, hp_col2, hp_col3, hp_col4 = st.columns(4)
+with hp_col1:
+    learning_rate = st.selectbox("学习率 (LR)", [0.01, 0.005, 0.001, 0.0005, 0.0001], index=1)
+with hp_col2:
+    optimizer_name = st.selectbox("优化器", ["Adam", "AdamW", "SGD", "RMSprop"], index=0)
+with hp_col3:
+    epochs = st.slider("最大训练轮数", 20, 500, 100, 20)
+with hp_col4:
+    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32, 64, 128], index=2)
+
+val_split = st.slider("验证集比例", 0.1, 0.4, 0.2, 0.05)
+patience = st.slider("早停耐心 (轮)", 5, 50, 15, 5)
+
+# 9. 动态模型构建
+class DynamicMLP(nn.Module):
+    def __init__(self, input_dim, layers_config, output_dim):
+        super().__init__()
+        seq = []
+        in_dim = input_dim
+        for cfg in layers_config:
+            seq.append(nn.Linear(in_dim, cfg["neurons"]))
+            if cfg["bn"]:
+                seq.append(nn.BatchNorm1d(cfg["neurons"]))
+            seq.append(get_activation(cfg["activation"]))
+            if cfg["dropout"] > 0:
+                seq.append(nn.Dropout(cfg["dropout"]))
+            in_dim = cfg["neurons"]
+        seq.append(nn.Linear(in_dim, output_dim))
+        self.net = nn.Sequential(*seq)
 
     def forward(self, x):
-        x = self.net(x)
-        return self.activation(x)
+        return self.net(x)
 
-#  模型加载函数
+# 10. 模型加载
 def load_saved_model():
-    """加载本地保存的分类模型及配置"""
     if all(os.path.exists(p) for p in [MODEL_PATH, SCALER_PATH, CONFIG_PATH]):
         try:
-            # 加载配置文件
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            
-            # 列名类型兼容转换
-            saved_features = [col_dtype(col) for col in config['features']]
-            saved_target = col_dtype(config['target'])
-            saved_n_classes = config['n_classes']
-            reverse_label_map = config.get('reverse_label_map', {})
-
-            # 列名一致性校验
-            if set(saved_features + [saved_target]) != set(col_options):
+            saved_features = config['features']
+            if set(saved_features + [config['target']]) != set(all_num_cols):
                 st.warning("⚠️ 保存的模型列名与当前数据不匹配，无法加载！")
                 return False
-
-            # 加载模型/标准化器
-            model = ClassificationNet(n_features, hidden1, hidden2, dropout_rate, saved_n_classes).to(device)
+            output_dim = 1 if config['task'] == 'regression' else config['n_classes']
+            model = DynamicMLP(len(saved_features), config['layers'], output_dim).to(device)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
             with open(SCALER_PATH, 'rb') as f:
                 scaler = pickle.load(f)
-            
-            # 模型状态存入session
-            st.session_state.cls_model = model
-            st.session_state.cls_scaler = scaler
-            st.session_state.cls_features = saved_features
-            st.session_state.cls_target = saved_target
-            st.session_state.cls_classes = saved_n_classes
-            st.session_state.reverse_label_map = reverse_label_map
+            st.session_state.diy_model = model
+            st.session_state.diy_scaler = scaler
+            st.session_state.diy_features = saved_features
+            st.session_state.diy_target = config['target']
+            st.session_state.diy_task = config['task']
+            if config['task'] == 'classification':
+                st.session_state.diy_n_classes = config['n_classes']
+                st.session_state.diy_reverse_label_map = config.get('reverse_label_map', {})
             return True
         except Exception as e:
-            st.error(f"模型加载失败：{str(e)}")
+            st.error(f"模型加载失败：{e}")
             return False
     return False
 
-# 页面初始化时自动加载模型
-if "cls_model" not in st.session_state:
-    load_success = load_saved_model()
-    if load_success:
-        st.toast("✅ 自动加载已保存的分类模型！", icon="🎉")
+if "diy_model" not in st.session_state:
+    if load_saved_model():
+        st.toast("✅ 自动加载已保存的模型！", icon="🎉")
 
-#模型训练逻辑 
+# 11. 训练
 st.subheader("🚀 模型训练")
 train_col, clear_col = st.columns(2)
 
 with train_col:
-    if st.button("开始训练 / 重新训练模型", type="primary", use_container_width=True):
-        with st.spinner("分类模型训练中..."):
-            # 类别样本数校验（每个类别至少2个样本）
+    if st.button("开始训练 / 重新训练", type="primary", use_container_width=True):
+        # 分类任务校验
+        if task_type == "分类 (Classification)":
             class_counts = numeric_df[target_col].value_counts()
             if class_counts.min() < 2:
-                st.error("❌ 训练失败：每个类别至少需要2个有效样本！")
+                st.error("❌ 每个类别至少需要 2 个样本！")
                 st.stop()
 
-            # 标签映射（转换为0开始的连续整数，避免CUDA索引越界）
-            y_raw = numeric_df[target_col].values
-            unique_labels = np.unique(y_raw)
-            label_map = {lbl: i for i, lbl in enumerate(unique_labels)}
-            reverse_label_map = {i: lbl for lbl, i in label_map.items()}
-            y = np.array([label_map[lbl] for lbl in y_raw])
-
-            # 数据拆分（分层抽样，保证类别分布一致）
+        with st.spinner("训练中..."):
+            # 数据准备
             X = numeric_df[feature_cols].values
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=42, stratify=y
+            if task_type == "回归 (Regression)":
+                y = numeric_df[target_col].values.reshape(-1, 1).astype(np.float32)
+            else:
+                y_raw = numeric_df[target_col].values
+                unique_labels = np.unique(y_raw)
+                label_map = {lbl: i for i, lbl in enumerate(unique_labels)}
+                reverse_label_map = {i: lbl for lbl, i in label_map.items()}
+                y = np.array([label_map[lbl] for lbl in y_raw])
+
+            # 三层拆分：训练集 / 验证集(早停) / 测试集(最终评估)
+            stratify_arg = y if task_type == "分类 (Classification)" else None
+
+            # 1. 先留出 20% 作为最终测试集
+            X_temp, X_test, y_temp, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=stratify_arg
+            )
+            # 2. 从剩余数据中按 val_split 比例分出验证集
+            stratify_temp = y_temp if task_type == "分类 (Classification)" else None
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_temp, y_temp, test_size=val_split, random_state=42, stratify=stratify_temp
             )
 
-            # 数据标准化
             scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_test_scaled = scaler.transform(X_test)
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+            X_test_s = scaler.transform(X_test)
 
-            # 张量转换（CPU适配）
-            X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32).to(device)
-            y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
-            X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32).to(device)
-            y_test_tensor = torch.tensor(y_test, dtype=torch.long).to(device)
+            # 转张量
+            X_train_t = torch.tensor(X_train_s, dtype=torch.float32).to(device)
+            X_val_t = torch.tensor(X_val_s, dtype=torch.float32).to(device)
+            X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to(device)
 
-            # 数据加载器
-            train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=8, shuffle=True)
+            if task_type == "回归 (Regression)":
+                y_train_t = torch.tensor(y_train, dtype=torch.float32).to(device)
+                y_val_t = torch.tensor(y_val, dtype=torch.float32).to(device)
+                y_test_t = torch.tensor(y_test, dtype=torch.float32).to(device)
+            else:
+                y_train_t = torch.tensor(y_train, dtype=torch.long).to(device)
+                y_val_t = torch.tensor(y_val, dtype=torch.long).to(device)
+                y_test_t = torch.tensor(y_test, dtype=torch.long).to(device)
 
-            # 模型初始化
-            model = ClassificationNet(n_features, hidden1, hidden2, dropout_rate, n_classes).to(device)
-            # 损失函数自适应
-            criterion = nn.CrossEntropyLoss() if n_classes > 2 else nn.BCEWithLogitsLoss()
-            optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)  # L2正则
+            st.info(f"📊 数据拆分：训练集 {len(X_train)} | 验证集 {len(X_val)} | 测试集 {len(X_test)}")
 
-            # 早停机制初始化
+            actual_batch = min(batch_size, len(X_train))
+            if actual_batch != batch_size:
+                st.info(f"⚠️ 训练集较小，batch_size 自动调整为 {actual_batch}")
+            train_loader = DataLoader(
+                TensorDataset(X_train_t, y_train_t), batch_size=actual_batch, shuffle=True
+            )
+
+            # 构建模型
+            output_dim = 1 if task_type == "回归 (Regression)" else n_classes
+            model = DynamicMLP(n_features, st.session_state.diy_layers, output_dim).to(device)
+
+            # 损失函数
+            if task_type == "回归 (Regression)":
+                criterion = nn.MSELoss()
+            elif n_classes == 2:
+                criterion = nn.BCEWithLogitsLoss()
+            else:
+                criterion = nn.CrossEntropyLoss()
+
+            # 优化器
+            if optimizer_name == "Adam":
+                optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+            elif optimizer_name == "AdamW":
+                optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+            elif optimizer_name == "SGD":
+                optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-4)
+            else:
+                optimizer = optim.RMSprop(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
+            # 训练循环 + 早停
             best_loss = float('inf')
             early_stop_count = 0
-            best_model = model.state_dict()
+            best_state = model.state_dict()
+            train_losses, val_losses = [], []
 
-            # 训练循环
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
             model.train()
             for epoch in range(epochs):
-                # 批次训练
+                epoch_loss = 0
                 for batch_x, batch_y in train_loader:
                     optimizer.zero_grad()
                     pred = model(batch_x)
-                    # 二分类场景维度适配
-                    if n_classes == 2:
+                    if task_type == "分类 (Classification)" and n_classes == 2:
                         pred = pred.squeeze()
-                        batch_y = batch_y.float()
-                    loss = criterion(pred, batch_y)
+                        batch_y_f = batch_y.float()
+                        loss = criterion(pred, batch_y_f)
+                    else:
+                        loss = criterion(pred, batch_y)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
 
-                # 验证集评估
                 model.eval()
                 with torch.no_grad():
-                    val_pred = model(X_test_tensor)
-                    if n_classes == 2:
+                    val_pred = model(X_val_t)
+                    if task_type == "分类 (Classification)" and n_classes == 2:
                         val_pred = val_pred.squeeze()
-                        val_loss = criterion(val_pred, y_test_tensor.float())
+                        val_loss = criterion(val_pred, y_val_t.float()).item()
                     else:
-                        val_loss = criterion(val_pred, y_test_tensor)
+                        val_loss = criterion(val_pred, y_val_t).item()
                 model.train()
 
-                # 早停判断
+                train_losses.append(epoch_loss / len(train_loader))
+                val_losses.append(val_loss)
+
+                progress_bar.progress((epoch + 1) / epochs)
+                status_text.text(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_losses[-1]:.4f} | Val Loss: {val_loss:.4f}")
+
                 if val_loss < best_loss:
                     best_loss = val_loss
                     early_stop_count = 0
-                    best_model = model.state_dict()
+                    best_state = model.state_dict()
                 else:
                     early_stop_count += 1
                     if early_stop_count >= patience:
                         st.info(f"⏹️ 早停触发！已训练 {epoch+1} 轮")
                         break
 
-            # 加载最优模型
-            model.load_state_dict(best_model)
+            progress_bar.empty()
+            status_text.empty()
+
+            model.load_state_dict(best_state)
             model.eval()
 
-            # 模型评估（计算准确率）
+            # 评估
             with torch.no_grad():
-                y_pred = model(X_test_tensor)
-                if n_classes == 2:
-                    y_pred = (y_pred.squeeze() > 0.5).cpu().numpy()
+                y_pred_t = model(X_test_t)
+                if task_type == "回归 (Regression)":
+                    y_pred_np = y_pred_t.cpu().numpy()
+                    r2 = r2_score(y_test, y_pred_np)
+                    mae = mean_absolute_error(y_test, y_pred_np)
+                    rmse = np.sqrt(mean_squared_error(y_test, y_pred_np))
                 else:
-                    y_pred = torch.argmax(y_pred, dim=1).cpu().numpy()
-            acc = accuracy_score(y_test, y_pred)
+                    if n_classes == 2:
+                        y_pred_np = (y_pred_t.squeeze().cpu().numpy() > 0.5).astype(int)
+                    else:
+                        y_pred_np = torch.argmax(y_pred_t, dim=1).cpu().numpy()
+                    acc = accuracy_score(y_test, y_pred_np)
 
-            # 模型持久化保存
+            # 保存模型
             torch.save(model.state_dict(), MODEL_PATH)
             with open(SCALER_PATH, 'wb') as f:
                 pickle.dump(scaler, f)
+            config_dict = {
+                "features": feature_cols,
+                "target": target_col,
+                "task": "regression" if task_type == "回归 (Regression)" else "classification",
+                "layers": st.session_state.diy_layers,
+            }
+            if task_type == "分类 (Classification)":
+                # 统一转为字符串键值，兼容 JSON 序列化与预测查找
+                config_dict["n_classes"] = n_classes
+                config_dict["label_map"] = {str(k): v for k, v in label_map.items()}
+                config_dict["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "features": [str(col) for col in feature_cols],
-                    "target": str(target_col),
-                    "n_classes": n_classes,
-                    "label_map": label_map,
-                    "reverse_label_map": reverse_label_map
-                }, f, ensure_ascii=False)
+                json.dump(config_dict, f, ensure_ascii=False)
 
-            # 训练结果存入session
-            st.session_state.cls_model = model
-            st.session_state.cls_scaler = scaler
-            st.session_state.cls_features = feature_cols
-            st.session_state.cls_target = target_col
-            st.session_state.cls_classes = n_classes
-            st.session_state.reverse_label_map = reverse_label_map
+            # 存入 session
+            st.session_state.diy_model = model
+            st.session_state.diy_scaler = scaler
+            st.session_state.diy_features = feature_cols
+            st.session_state.diy_target = target_col
+            st.session_state.diy_task = "regression" if task_type == "回归 (Regression)" else "classification"
+            if task_type == "分类 (Classification)":
+                st.session_state.diy_n_classes = n_classes
+                st.session_state.diy_reverse_label_map = {str(k): str(v) for k, v in reverse_label_map.items()}
 
-            st.success(f"训练完成！准确率 = {acc:.4f}")
+            # 显示结果
+            if task_type == "回归 (Regression)":
+                st.success(f"训练完成！R² = {r2:.4f} | MAE = {mae:.4f} | RMSE = {rmse:.4f}")
+            else:
+                st.success(f"训练完成！准确率 = {acc:.4f}")
+
+            # 损失曲线
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=train_losses, mode='lines', name='训练损失'))
+            fig.add_trace(go.Scatter(y=val_losses, mode='lines', name='验证损失'))
+            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="Epoch", yaxis_title="Loss",
+                              template="plotly_white", height=350)
+            st.plotly_chart(fig, use_container_width=True)
 
 with clear_col:
-    # 清除已保存模型
-    if st.button("清除已保存分类模型", use_container_width=True):
-        # 删除模型文件
+    if st.button("清除已保存模型", use_container_width=True):
         for p in [MODEL_PATH, SCALER_PATH, CONFIG_PATH]:
             if os.path.exists(p):
                 os.remove(p)
-        # 清空session状态
-        keys = ["cls_model", "cls_scaler", "cls_features", "cls_target", "cls_classes", "reverse_label_map"]
-        for k in keys:
+        for k in ["diy_model", "diy_scaler", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map"]:
             if k in st.session_state:
                 del st.session_state[k]
-        st.warning("✅ 已清除所有分类模型文件及缓存！")
+        st.warning("已清除所有保存的模型！")
 
-# 模型预测功能
-st.subheader("🎯 决策预测")
-if "cls_model" not in st.session_state:
-    st.warning("⚠️ 请先完成模型训练！")
+# 12. 预测
+st.subheader("🎯 数据预测")
+if "diy_model" not in st.session_state:
+    st.warning("请先完成模型训练！")
 else:
-    # 加载session中的模型状态
-    model = st.session_state.cls_model
-    scaler = st.session_state.cls_scaler
-    features = st.session_state.cls_features
-    target = st.session_state.cls_target
-    n_classes = st.session_state.cls_classes
-    reverse_label_map = st.session_state.reverse_label_map
+    model = st.session_state.diy_model
+    scaler = st.session_state.diy_scaler
+    features = st.session_state.diy_features
+    target = st.session_state.diy_target
+    task = st.session_state.diy_task
 
-    st.info(f"✅ 模型加载成功 | 分类目标：{target} | 类别数：{n_classes}")
-    st.write("请输入特征值进行决策预测：")
-    
-    # 特征输入框（按列排布）
+    st.info(f"✅ 模型已加载 | 任务：{'回归' if task == 'regression' else '分类'} | 目标：{target}")
+
+    # 确保模型在正确的设备上
+    model.to(device)
+
+    st.write("请输入特征值进行预测：")
     input_data = []
-    cols = st.columns(len(features))
+    cols = st.columns(min(len(features), 5))
     for i, col in enumerate(cols):
-        val = col.number_input(f"特征 {features[i]}", value=0.0, step=0.1)
+        idx = i
+        val = col.number_input(f"{features[idx]}", value=0.0, step=0.1, key=f"pred_{idx}")
         input_data.append(val)
+    # 如果特征列多于一排
+    if len(features) > 5:
+        for row_start in range(5, len(features), 5):
+            cols = st.columns(5)
+            for j, col in enumerate(cols):
+                idx = row_start + j
+                if idx < len(features):
+                    val = col.number_input(f"{features[idx]}", value=0.0, step=0.1, key=f"pred_{idx}")
+                    input_data.append(val)
 
-    # 预测执行
-    if st.button("执行决策预测", use_container_width=True):
-        model.eval()
-        with torch.no_grad():
-            # 数据标准化 + 张量转换
-            input_arr = np.array([input_data])
-            input_scaled = scaler.transform(input_arr)
-            input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
-            output = model(input_tensor)
+    if st.button("执行预测", use_container_width=True, type="primary"):
+        if len(input_data) != len(features):
+            st.error("输入特征数与模型特征数不匹配！")
+        else:
+            model.eval()
+            with torch.no_grad():
+                input_arr = np.array([input_data])
+                input_scaled = scaler.transform(input_arr)
+                input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
+                output = model(input_tensor)
 
-            # 预测结果解析
-            if n_classes == 2:
-                prob = output.item()
-                pred_idx = 1 if prob > 0.5 else 0
-            else:
-                prob = torch.max(output).item()
-                pred_idx = torch.argmax(output, dim=1).item()
+                if task == "regression":
+                    result = output.item()
+                    st.success(f"预测结果：**{result:.4f}**")
+                else:
+                    n_cls = st.session_state.diy_n_classes
+                    reverse_label_map = st.session_state.diy_reverse_label_map
+                    if n_cls == 2:
+                        prob = torch.sigmoid(output).item()
+                        pred_idx = 1 if prob > 0.5 else 0
+                        prob_display = prob if pred_idx == 1 else 1 - prob
+                    else:
+                        probs = torch.softmax(output, dim=1).cpu().numpy()[0]
+                        pred_idx = int(np.argmax(probs))
+                        prob_display = probs[pred_idx]
 
-            # 还原原始标签
-            pred_class = reverse_label_map.get(pred_idx, pred_idx)
-            st.success(f"🎯 预测类别：{pred_class} | 置信度：{prob:.4f}")
+                    pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
+                    st.success(f"预测类别：**{pred_class}** | 置信度：**{prob_display:.4f}**")
+
+                    # 多分类显示所有类别概率
+                    if n_cls > 2:
+                        st.write("各类别概率：")
+                        prob_df = pd.DataFrame({
+                            "类别": [reverse_label_map.get(str(i), i) for i in range(n_cls)],
+                            "概率": probs
+                        }).sort_values("概率", ascending=False)
+                        st.dataframe(prob_df, use_container_width=True, hide_index=True)
+
+    # 批量预测
+    st.divider()
+    st.subheader("📦 批量预测 (CSV)")
+    batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="diy_batch")
+    if batch_file is not None:
+        batch_df = pd.read_csv(batch_file)
+        missing_cols = set(features) - set(batch_df.columns)
+        if missing_cols:
+            st.error(f"缺少特征列：{missing_cols}")
+        else:
+            batch_X = batch_df[features].values
+            model.to(device)
+            model.eval()
+            with torch.no_grad():
+                batch_scaled = scaler.transform(batch_X)
+                batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
+                output = model(batch_tensor)
+
+                if task == "regression":
+                    predictions = output.cpu().numpy().flatten()
+                    result_df = batch_df.copy()
+                    result_df[f"预测_{target}"] = predictions
+                else:
+                    n_cls = st.session_state.diy_n_classes
+                    reverse_label_map = st.session_state.diy_reverse_label_map
+                    if n_cls == 2:
+                        probs = torch.sigmoid(output).cpu().numpy().flatten()
+                        pred_indices = (probs > 0.5).astype(int)
+                        confidences = np.where(pred_indices == 1, probs, 1 - probs)
+                    else:
+                        probs_all = torch.softmax(output, dim=1).cpu().numpy()
+                        pred_indices = np.argmax(probs_all, axis=1)
+                        confidences = probs_all[np.arange(len(pred_indices)), pred_indices]
+                    result_df = batch_df.copy()
+                    result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in pred_indices]
+                    result_df["置信度"] = confidences
+
+            st.dataframe(result_df, use_container_width=True)
+            csv = result_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("📥 下载预测结果 CSV", csv, "predictions.csv", "text/csv", use_container_width=True)
