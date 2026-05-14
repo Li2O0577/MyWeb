@@ -28,6 +28,22 @@ log/
 .DS_Store
 Thumbs.db
 
+# 模型文件（训练产物，不上传Git）
+models/*
+!models/.gitkeep
+
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pb
+*.pkl
+*.joblib
+*.safetensors
+*.ckpt
+*.bin
+*.sav
+
 # 临时文件
 *.tmp
 *.temp

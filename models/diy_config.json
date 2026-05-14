@@ -1,1 +1,0 @@
-{"features": ["reading score", "writing score"], "target": "math score", "task": "regression", "layers": [{"neurons": 8, "activation": "ReLU", "bn": false, "dropout": 0.0}]}
