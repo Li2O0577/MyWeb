@@ -1,0 +1,1 @@
+{"features": ["gender", "race/ethnicity", "parental level of education", "lunch", "test preparation course", "math score", "reading score"], "target": "writing score", "criterion": "entropy", "max_depth": 3}

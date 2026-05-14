@@ -93,9 +93,9 @@ def load_saved_dt():
                 pipeline = pickle.load(f)
 
             st.session_state.dt_pipeline = pipeline
-            st.session_state.dt_features = feature_cols
-            st.session_state.dt_target = target_col
-            st.session_state.dt_criterion = criterion
+            st.session_state.dt_features = config.get("features", feature_cols)
+            st.session_state.dt_target = config.get("target", target_col)
+            st.session_state.dt_criterion = config.get("criterion", criterion)
             return True
         except Exception as e:
             st.error(f"加载模型失败：{str(e)}")
@@ -109,22 +109,31 @@ if "dt_pipeline" not in st.session_state:
         st.toast("✅ 自动加载已保存的决策树模型！", icon="🎉")
 
 # 解析决策树层级（展示每层特征+熵）
-def show_tree_rules(model, feature_names):
+def show_tree_rules(model):
     tree = model.named_steps["classifier"]
     tree_ = tree.tree_
-    rules = export_text(tree, feature_names=feature_names)
+    preprocessor = model.named_steps["preprocess"]
+
+    # 获取 OneHot 展开后的实际特征名（例如 cat_col 展开为 cat_col_A, cat_col_B...）
+    try:
+        expanded_names = list(preprocessor.get_feature_names_out())
+    except Exception:
+        expanded_names = [f"x{i}" for i in range(tree_.n_features_)]
+
+    rules = export_text(tree, feature_names=expanded_names)
     st.markdown("### 🌿 决策树层级规则（特征 + 熵/基尼）")
     st.code(rules, language="text")
 
     # 详细节点信息
+    criterion_name = "信息熵" if tree.criterion == "entropy" else "基尼系数"
     st.markdown("### 📊 每层节点详细信息")
     node_info = []
     for i in range(tree_.node_count):
         node_info.append({
             "节点ID": i,
-            "划分特征": feature_names[tree_.feature[i]] if tree_.feature[i] != -2 else "叶子节点",
+            "划分特征": expanded_names[tree_.feature[i]] if tree_.feature[i] != -2 else "叶子节点",
             "划分阈值": round(tree_.threshold[i], 4) if tree_.feature[i] != -2 else "-",
-            f"{'信息熵' if criterion=='entropy' else '基尼系数'}值": round(tree_.impurity[i], 4),
+            f"{criterion_name}值": round(tree_.impurity[i], 4),
             "样本数量": int(tree_.n_node_samples[i]),
             "节点类型": "内部节点" if tree_.children_left[i] != -1 else "叶子节点"
         })
@@ -203,7 +212,7 @@ st.subheader("🌿 决策树规则与层级熵展示")
 if "dt_pipeline" not in st.session_state:
     st.warning("请先训练模型！")
 else:
-    show_tree_rules(st.session_state.dt_pipeline, feature_cols)
+    show_tree_rules(st.session_state.dt_pipeline)
 
 #预测功能 
 st.subheader("🎯 新数据预测")
