@@ -17,15 +17,25 @@ render_sidebar("pages/3_data_processing.py")
 st.title("🧹 数据处理")
 
 # 2. 数据上传与预处理组件
-df = data_uploader()
+df_source = data_uploader()
 
-# 初始化：保存原始数据（用于重置，避免None报错）
+# 保存原始数据快照（仅在新文件上传或首次加载时）
 if "original_df" not in st.session_state:
-    st.session_state.original_df = None  # 先预初始化，杜绝KeyError
-# 每次上传新数据时，自动更新原始数据（确保重置的是最新上传的源数据）
-if df is not None:
-    if st.session_state.original_df is None or not df.equals(st.session_state.original_df):
-        st.session_state.original_df = df.copy()
+    st.session_state.original_df = None
+if df_source is not None:
+    current_source = st.session_state.get("_source_file", None)
+    if st.session_state.get("_3_snapshot_source") != current_source:
+        st.session_state.original_df = df_source.copy()
+        st.session_state._3_snapshot_source = current_source
+
+# 初始化页面工作副本（独立于全局 main_df，避免自动污染其他页面）
+if df_source is not None:
+    if st.session_state.get("_3_working_source") != current_source or "_page3_working_df" not in st.session_state:
+        st.session_state._page3_working_df = df_source.copy()
+        st.session_state._3_working_source = current_source
+    df = st.session_state._page3_working_df
+else:
+    df = None
 
 if df is None:
     st.warning("请先在数据加载页面上传数据！")
@@ -54,7 +64,7 @@ with st.expander("1. 基础行列操作", expanded=True):
         # 删除行 + 唯一KEY
         del_row = st.number_input("删除指定行号", min_value=0, max_value=len(df)-1, value=0, key="del_row_1")
         if st.button("删除该行", key="btn_del_row"):
-            df = df.drop(index=del_row)
+            df = df.drop(index=df.index[del_row])
 
 with st.expander("2. 数据类型修改"):
     st.subheader("转换列的数据类型")
@@ -125,7 +135,8 @@ with st.expander("6. 类别特征编码"):
             else:
                 ohe = OneHotEncoder(sparse_output=False, drop="first")
                 new_cols = ohe.fit_transform(df[[cat_col]])
-                new_df = pd.DataFrame(new_cols, columns=[f"{cat_col}_{i}" for i in range(new_cols.shape[1])])
+                feature_names = ohe.get_feature_names_out([cat_col])
+                new_df = pd.DataFrame(new_cols, columns=feature_names, index=df.index)
                 df = pd.concat([df.drop(columns=[cat_col]), new_df], axis=1)
             st.success("编码完成！")
 
@@ -204,28 +215,28 @@ st.subheader("🔘 操作控制")
 ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
 
 with ctrl1:
-    # 保存当前处理结果到全局变量
     if st.button("保存修改", use_container_width=True, key="btn_save"):
-        st.session_state.main_df = df
-        st.success("已保存！")
+        st.session_state.main_df = df.copy()
+        st.session_state._data_cleaned = True
+        st.success("已保存！修改不会因切换页面而丢失。")
 
 with ctrl2:
-    # 重置为原始数据（加空值判断，彻底避免None报错）
     if st.button("重置为原始数据", use_container_width=True, key="btn_reset"):
         if st.session_state.original_df is not None:
+            st.session_state._page3_working_df = st.session_state.original_df.copy()
             st.session_state.main_df = st.session_state.original_df.copy()
+            st.session_state._data_cleaned = True
             st.rerun()
         else:
             st.warning("⚠️ 暂无原始数据！请先上传数据后再重置。")
 
 with ctrl3:
-    # 撤销（简易版：回到上一次保存）
     if st.button("撤销操作", use_container_width=True, key="btn_undo"):
-        df = st.session_state.main_df.copy()
-        st.rerun()
+        if "main_df" in st.session_state and st.session_state.main_df is not None:
+            st.session_state._page3_working_df = st.session_state.main_df.copy()
+            st.rerun()
 
 with ctrl4:
-    # 导出CSV
     st.download_button(
         label="导出CSV",
         data=df.to_csv(index=False).encode("utf-8"),
@@ -235,5 +246,5 @@ with ctrl4:
         key="btn_export"
     )
 
-# 同步到全局数据
-st.session_state.main_df = df
+# 同步工作副本（页面内操作自动保留，但不污染全局 main_df）
+st.session_state._page3_working_df = df.copy()

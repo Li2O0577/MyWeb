@@ -117,4 +117,14 @@ st.divider()
 if df is None:
     st.info("请先上传数据，才能进行后续的可视化、处理和建模等操作（支持 CSV 和 Excel）。")
 else:
-    st.success("数据加载成功！可导航到其他页面进行可视化、处理或建模。")
+    if st.session_state.get("_data_cleaned", False):
+        c_msg, c_btn = st.columns([3, 1])
+        with c_msg:
+            st.success("数据已修复。可导航到其他页面进行可视化、处理或建模。")
+        with c_btn:
+            if st.button("🔄 重新加载原始数据", use_container_width=True):
+                st.session_state._data_cleaned = False
+                st.session_state._source_file = ""
+                st.rerun()
+    else:
+        st.success("数据加载成功！可导航到其他页面进行可视化、处理或建模。")

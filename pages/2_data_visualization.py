@@ -142,8 +142,11 @@ if df is not None:
             x_col = st.selectbox("X 轴 (类别)", all_cols)
             y_col = st.selectbox("Y 轴 (数值)", numeric_cols if numeric_cols else all_cols)
             color_col = st.selectbox("颜色 / 分组 (可选)", ["无"] + all_cols)
-            agg_label = st.selectbox("聚合方式",
-                                     ["无", "均值", "求和", "计数", "中位数", "最小值", "最大值"])
+            if numeric_cols:
+                agg_label = st.selectbox("聚合方式",
+                                         ["无", "均值", "求和", "计数", "中位数", "最小值", "最大值"])
+            else:
+                agg_label = "无"
             orient_label = st.radio("方向", ["垂直", "水平"], horizontal=True)
             bar_mode_label = st.selectbox("柱状模式 (启用颜色分组时生效)", ["分组", "堆叠", "相对比例"])
 
@@ -305,8 +308,11 @@ if df is not None:
         with chart_col:
             if values_col == "⟳ 计数":
                 vc = df[names_col].value_counts().reset_index()
-                vc.columns = [names_col, "count"]
-                fig = px.pie(vc, names=names_col, values="count", hole=hole_size,
+                values_name = "count"
+                while values_name == names_col:
+                    values_name = "_" + values_name
+                vc.columns = [names_col, values_name]
+                fig = px.pie(vc, names=names_col, values=values_name, hole=hole_size,
                              title=chart_title or f"饼图: {names_col}",
                              template=color_template, width=fig_width, height=fig_height)
             else:
