@@ -32,7 +32,7 @@ You are part of a data analysis platform. The following built-in modules are ava
 | 5 | Classification | Train PyTorch MLP for binary/multi-class classification |
 | 6 | DIY MLP | Customize MLP architecture (layers, neurons, activation, learning rate) |
 | 7 | Decision Tree | Train decision tree classifier + visualize tree + export rules |
-| 8 | K-means | K-means clustering + elbow method + PCA visualization |
+| 8 | Clustering | K-means + DBSCAN clustering, elbow method, silhouette score, PCA visualization |
 | 9 | LLM Analysis | THIS page — you are providing analysis recommendations now |
 
 **Your Task:**
@@ -296,22 +296,29 @@ if send_btn:
     else:
         st.session_state.chat_messages.append({"role": "user", "content": user_input.strip()})
 
-        with st.spinner("等待 LLM 回复中..."):
+        # 构建消息列表
+        api_messages = [{"role": "system", "content": system_prompt}]
+        for msg in st.session_state.chat_messages:
+            api_messages.append(dict(msg))
+
+        if not st.session_state.chat_data_sent and df is not None:
+            if is_smart:
+                data_summary = build_data_summary(df)
+                api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n---\n\n{data_summary}"
+            else:
+                data_text = df.to_csv(index=False)
+                api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n--- Data (CSV) ---\n{data_text}"
+            st.session_state.chat_data_sent = True
+
+        # 流式请求
+        stream_container = st.container()
+        with stream_container:
+            st.markdown("**🤖 Assistant**")
+            stream_placeholder = st.empty()
+            full_reply = ""
+            cursor = "▌"
+
             try:
-                api_messages = [{"role": "system", "content": system_prompt}]
-
-                for msg in st.session_state.chat_messages:
-                    api_messages.append(dict(msg))
-
-                if not st.session_state.chat_data_sent and df is not None:
-                    if is_smart:
-                        data_summary = build_data_summary(df)
-                        api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n---\n\n{data_summary}"
-                    else:
-                        data_text = df.to_csv(index=False)
-                        api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n--- Data (CSV) ---\n{data_text}"
-                    st.session_state.chat_data_sent = True
-
                 resp = requests.post(
                     f"{api_base.rstrip('/')}/chat/completions",
                     headers={
@@ -321,19 +328,39 @@ if send_btn:
                     json={
                         "model": model,
                         "messages": api_messages,
-                        "temperature": 0.7
+                        "temperature": 0.7,
+                        "stream": True
                     },
-                    timeout=120
+                    timeout=180,
+                    stream=True
                 )
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    reply = data["choices"][0]["message"]["content"]
-                    st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+                if resp.status_code != 200:
+                    st.session_state.chat_messages.pop()
+                    st.error(f"API 错误 [{resp.status_code}]: {resp.text}")
+                    st.stop()
+
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data_str)["choices"][0]["delta"]
+                        if "content" in delta and delta["content"]:
+                            full_reply += delta["content"]
+                            stream_placeholder.markdown(full_reply + cursor)
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+
+                if full_reply:
+                    st.session_state.chat_messages.append({"role": "assistant", "content": full_reply})
+                    stream_placeholder.empty()
                     st.rerun()
                 else:
                     st.session_state.chat_messages.pop()
-                    st.error(f"API 错误 [{resp.status_code}]: {resp.text}")
+                    st.error("LLM 返回了空响应，请重试。")
 
             except requests.exceptions.Timeout:
                 st.session_state.chat_messages.pop()

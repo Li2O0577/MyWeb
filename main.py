@@ -52,8 +52,8 @@ with col7:
     if st.button("🌳 决策树", use_container_width=True,type="secondary"):
         st.switch_page("pages/7_decision_tree.py")      #（决策树）
 with col8:
-    if st.button("🧪 K-means 聚类", use_container_width=True,type="secondary"):
-        st.switch_page("pages/8_k_means.py")      #（K-means聚类）
+    if st.button("🧪 聚类分析", use_container_width=True,type="secondary"):
+        st.switch_page("pages/8_clustering.py")
 with col9:
     if st.button("🤖 大模型分析", use_container_width=True, type="secondary"):
         st.switch_page("pages/9_llm_analysis.py")      #（大模型分析）
@@ -76,7 +76,7 @@ with st.sidebar:
         ("🔮 分类决策", "pages/5_classification.py"),
         ("🛠️ 自定义 MLP", "pages/6_diy_mlp.py"),
         ("🌳 决策树", "pages/7_decision_tree.py"),
-        ("🧪 K-means 聚类", "pages/8_k_means.py"),
+        ("🧪 聚类分析", "pages/8_clustering.py"),
         ("🤖 大模型分析", "pages/9_llm_analysis.py"),
     ]
     for label, path in pages:
@@ -84,6 +84,7 @@ with st.sidebar:
             st.switch_page(path)
     st.divider()
 
-    st.button("🏠 返回首页", use_container_width=True, type="primary")
+    if st.button("🏠 返回首页", use_container_width=True, type="primary"):
+        st.switch_page("main.py")
     st.divider()
     st.caption("Indeterminate | 数据分析平台")

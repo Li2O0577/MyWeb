@@ -151,7 +151,7 @@ def render_sidebar(current_path):
             ("🔮 分类决策", "pages/5_classification.py"),
             ("🛠️ 自定义 MLP", "pages/6_diy_mlp.py"),
             ("🌳 决策树", "pages/7_decision_tree.py"),
-            ("🧪 K-means 聚类", "pages/8_k_means.py"),
+            ("🧪 聚类分析", "pages/8_clustering.py"),
             ("🤖 大模型分析", "pages/9_llm_analysis.py"),
         ]
 
