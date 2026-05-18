@@ -1,0 +1,56 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# 密钥/配置
+.env
+.env.*
+!.env.example
+config.json
+secret.json
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# 日志
+logs/
+*.log
+log/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+
+# 模型文件（训练产物）
+models/*
+!models/.gitkeep
+
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pb
+*.pkl
+*.joblib
+*.safetensors
+*.ckpt
+*.bin
+*.sav
+
+# 临时文件
+*.tmp
+*.temp
+
+# 后端 session 临时数据
+backend/sessions/
+
+# Claude 配置（不提交）
+CLAUDE.md
+AGENTS.md
