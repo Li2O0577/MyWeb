@@ -196,10 +196,8 @@ st.subheader("📐 网络结构摘要")
 layer_dims = [n_features]
 for layer in st.session_state.diy_layers:
     layer_dims.append(layer["neurons"])
-if task_type == "回归 (Regression)":
-    layer_dims.append(1)
-else:
-    layer_dims.append(n_classes)
+output_dim_display = 1 if task_type == "回归 (Regression)" or n_classes == 2 else n_classes
+layer_dims.append(output_dim_display)
 
 total_params = 0
 for i in range(len(layer_dims) - 1):
@@ -219,9 +217,9 @@ for i, layer in enumerate(st.session_state.diy_layers):
     extra_str = " + " + " + ".join(extras) if extras else ""
     arch_parts.append(f"Dense({layer['neurons']}) + {layer['activation']}{extra_str}")
 if task_type == "回归 (Regression)":
-    arch_parts.append(f"Output(1) [Linear]")
+    arch_parts.append(f"Output({output_dim_display}) [Linear]")
 else:
-    arch_parts.append(f"Output({n_classes}) [Logits]")
+    arch_parts.append(f"Output({output_dim_display}) [Logits]")
 
 st.code("  →  ".join(arch_parts), language=None)
 st.caption(f"总参数量：**{total_params:,}**  |  训练样本：**{n_samples}**  |  参数量/样本比：**{total_params / max(n_samples, 1):.2f}**")
