@@ -7,6 +7,7 @@ import torch.optim as optim
 import os
 import pickle
 import json
+import copy
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -127,6 +128,7 @@ patience = 10
 class ClassificationNet(nn.Module):
     def __init__(self, input_dim, h1, h2, dropout_rate, num_classes):
         super().__init__()
+        output_dim = 1 if num_classes == 2 else num_classes
         self.net = nn.Sequential(
             nn.Linear(input_dim, h1),
             nn.ReLU(),
@@ -134,7 +136,7 @@ class ClassificationNet(nn.Module):
             nn.Linear(h1, h2),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(h2, num_classes)
+            nn.Linear(h2, output_dim)
         )
 
     def forward(self, x):
@@ -240,7 +242,7 @@ with train_col:
             # 早停机制 + 损失记录
             best_loss = float('inf')
             early_stop_count = 0
-            best_state = model.state_dict()
+            best_state = copy.deepcopy(model.state_dict())
             train_losses, val_losses = [], []
 
             progress_bar = st.progress(0)
@@ -254,7 +256,7 @@ with train_col:
                     optimizer.zero_grad()
                     pred = model(batch_x)
                     if n_classes == 2:
-                        pred = pred.squeeze()
+                        pred = pred.squeeze(1)
                         batch_y = batch_y.float()
                     loss = criterion(pred, batch_y)
                     loss.backward()
@@ -268,7 +270,7 @@ with train_col:
                 with torch.no_grad():
                     val_pred = model(X_val_tensor)
                     if n_classes == 2:
-                        val_pred = val_pred.squeeze()
+                        val_pred = val_pred.squeeze(1)
                         val_loss = criterion(val_pred, y_val_tensor.float()).item()
                     else:
                         val_loss = criterion(val_pred, y_val_tensor).item()
@@ -283,7 +285,7 @@ with train_col:
                 if val_loss < best_loss:
                     best_loss = val_loss
                     early_stop_count = 0
-                    best_state = model.state_dict()
+                    best_state = copy.deepcopy(model.state_dict())
                 else:
                     early_stop_count += 1
                     if early_stop_count >= patience:
@@ -300,7 +302,7 @@ with train_col:
             with torch.no_grad():
                 y_pred = model(X_test_tensor)
                 if n_classes == 2:
-                    y_pred = (torch.sigmoid(y_pred).squeeze() > 0.5).cpu().numpy()
+                    y_pred = (torch.sigmoid(y_pred).view(-1) > 0.5).cpu().numpy()
                 else:
                     y_pred = torch.argmax(y_pred, dim=1).cpu().numpy()
 
@@ -309,7 +311,7 @@ with train_col:
             # 混淆矩阵 + 分类报告
             cm = confusion_matrix(y_test, y_pred)
             unique_test_labels = sorted(set(y_test) | set(y_pred))
-            label_names = [reverse_label_map.get(str(l), l) for l in unique_test_labels]
+            label_names = [reverse_label_map.get(l, reverse_label_map.get(str(l), l)) for l in unique_test_labels]
 
             col_cm, col_report = st.columns([1, 1])
             with col_cm:
@@ -410,7 +412,7 @@ else:
             output = model(input_tensor)
 
             if n_classes == 2:
-                prob = torch.sigmoid(output).item()
+                prob = torch.sigmoid(output).squeeze().item()
                 pred_idx = 1 if prob > 0.5 else 0
             else:
                 prob = torch.softmax(output, dim=1).max().item()

@@ -7,6 +7,7 @@ import torch.optim as optim
 import os
 import pickle
 import json
+import copy
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -295,7 +296,7 @@ def load_saved_model():
             if set(saved_features + [config['target']]) != set(all_num_cols):
                 st.warning("⚠️ 保存的模型列名与当前数据不匹配，无法加载！")
                 return False
-            output_dim = 1 if config['task'] == 'regression' else config['n_classes']
+            output_dim = 1 if config['task'] == 'regression' or config.get('n_classes') == 2 else config['n_classes']
             model = DynamicMLP(len(saved_features), config['layers'], output_dim).to(device)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
             with open(SCALER_PATH, 'rb') as f:
@@ -385,7 +386,7 @@ with train_col:
             )
 
             # 构建模型
-            output_dim = 1 if task_type == "回归 (Regression)" else n_classes
+            output_dim = 1 if task_type == "回归 (Regression)" or n_classes == 2 else n_classes
             model = DynamicMLP(n_features, st.session_state.diy_layers, output_dim).to(device)
 
             # 损失函数
@@ -409,7 +410,7 @@ with train_col:
             # 训练循环 + 早停
             best_loss = float('inf')
             early_stop_count = 0
-            best_state = model.state_dict()
+            best_state = copy.deepcopy(model.state_dict())
             train_losses, val_losses = [], []
 
             progress_bar = st.progress(0)
@@ -422,7 +423,7 @@ with train_col:
                     optimizer.zero_grad()
                     pred = model(batch_x)
                     if task_type == "分类 (Classification)" and n_classes == 2:
-                        pred = pred.squeeze()
+                        pred = pred.squeeze(1)
                         batch_y_f = batch_y.float()
                         loss = criterion(pred, batch_y_f)
                     else:
@@ -435,7 +436,7 @@ with train_col:
                 with torch.no_grad():
                     val_pred = model(X_val_t)
                     if task_type == "分类 (Classification)" and n_classes == 2:
-                        val_pred = val_pred.squeeze()
+                        val_pred = val_pred.squeeze(1)
                         val_loss = criterion(val_pred, y_val_t.float()).item()
                     else:
                         val_loss = criterion(val_pred, y_val_t).item()
@@ -450,7 +451,7 @@ with train_col:
                 if val_loss < best_loss:
                     best_loss = val_loss
                     early_stop_count = 0
-                    best_state = model.state_dict()
+                    best_state = copy.deepcopy(model.state_dict())
                 else:
                     early_stop_count += 1
                     if early_stop_count >= patience:
@@ -473,7 +474,7 @@ with train_col:
                     rmse = np.sqrt(mean_squared_error(y_test, y_pred_np))
                 else:
                     if n_classes == 2:
-                        y_pred_np = (y_pred_t.squeeze().cpu().numpy() > 0.5).astype(int)
+                        y_pred_np = (torch.sigmoid(y_pred_t).view(-1).cpu().numpy() > 0.5).astype(int)
                     else:
                         y_pred_np = torch.argmax(y_pred_t, dim=1).cpu().numpy()
                     acc = accuracy_score(y_test, y_pred_np)
@@ -581,7 +582,7 @@ else:
                     n_cls = st.session_state.diy_n_classes
                     reverse_label_map = st.session_state.diy_reverse_label_map
                     if n_cls == 2:
-                        prob = torch.sigmoid(output).item()
+                        prob = torch.sigmoid(output).squeeze().item()
                         pred_idx = 1 if prob > 0.5 else 0
                         prob_display = prob if pred_idx == 1 else 1 - prob
                     else:

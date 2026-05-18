@@ -75,7 +75,8 @@ is_kmeans = (st.session_state.cluster_algorithm == "kmeans")
 if is_kmeans:
     col1, col2, _ = st.columns([1, 1, 2])
     with col1:
-        n_clusters = st.number_input("聚类数量 K", min_value=2, max_value=15, value=3, step=1)
+        max_clusters = min(15, n_samples)
+        n_clusters = st.number_input("聚类数量 K", min_value=2, max_value=max_clusters, value=min(3, max_clusters), step=1)
     with col2:
         st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征 | K={n_clusters}")
 
@@ -320,9 +321,16 @@ if "cluster_data" in st.session_state:
     st.markdown("#### 聚类分布可视化")
     X = data[feature_cols].values
     X_scaled = st.session_state.cluster_scaler.transform(X)
-    pca = PCA(n_components=2)
-    X_pca = pca.fit_transform(X_scaled)
-    ev1, ev2 = pca.explained_variance_ratio_
+    if X_scaled.shape[1] >= 2:
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(X_scaled)
+        ev1, ev2 = pca.explained_variance_ratio_
+        x_title = f"主成分 1 ({ev1:.1%} 方差)"
+        y_title = f"主成分 2 ({ev2:.1%} 方差)"
+    else:
+        X_pca = np.column_stack([X_scaled[:, 0], np.zeros(len(X_scaled))])
+        x_title = f"{feature_cols[0]} (标准化)"
+        y_title = "参考轴"
 
     fig_cluster = go.Figure()
     labels = data["聚类标签"].values
@@ -348,8 +356,8 @@ if "cluster_data" in st.session_state:
     algo_title = "K-means" if is_kmeans_result else "DBSCAN"
     fig_cluster.update_layout(
         title=f"{algo_title} 聚类可视化 (K={n_found})" if is_kmeans_result else f"DBSCAN 聚类可视化 ({n_found} 簇)",
-        xaxis_title=f"主成分 1 ({ev1:.1%} 方差)",
-        yaxis_title=f"主成分 2 ({ev2:.1%} 方差)",
+        xaxis_title=x_title,
+        yaxis_title=y_title,
         template="plotly_white", height=420,
         margin=dict(l=0, r=0, t=40, b=0),
         legend=dict(title="", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)

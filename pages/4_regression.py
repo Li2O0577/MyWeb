@@ -7,6 +7,7 @@ import torch.optim as optim
 import os
 import pickle
 import json
+import copy
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -209,6 +210,7 @@ with train_col:
             # 早停机制 + 损失记录
             best_loss = float('inf')
             early_stop_count = 0
+            best_state = copy.deepcopy(model.state_dict())
             train_losses, val_losses = [], []
 
             progress_bar = st.progress(0)
@@ -244,7 +246,7 @@ with train_col:
                 if val_loss < best_loss:
                     best_loss = val_loss
                     early_stop_count = 0
-                    best_state = model.state_dict()
+                    best_state = copy.deepcopy(model.state_dict())
                 else:
                     early_stop_count += 1
                     if early_stop_count >= patience:

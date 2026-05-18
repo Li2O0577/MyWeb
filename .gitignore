@@ -50,3 +50,4 @@ models/*
 
 # 去除agent缓存
 CLAUDE.md
+AGENTS.md

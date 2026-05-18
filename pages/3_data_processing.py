@@ -56,15 +56,43 @@ with st.expander("1. 基础行列操作", expanded=True):
             df = df.drop(columns=drop_cols)
     
     with col2:
-        # 重命名列 + 唯一KEY
-        rename_col = st.selectbox("选择要重命名的列", df.columns, key="rename_col_1")
-        new_name = st.text_input("新列名", value=rename_col, key="new_name_1")
-        if st.button("确认修改列名", key="btn_rename"):
-            df.rename(columns={rename_col: new_name}, inplace=True)
+        if len(df.columns) == 0:
+            st.warning("当前没有可操作的列。")
+        else:
+            # 重命名列 + 唯一KEY
+            rename_col = st.selectbox("选择要重命名的列", df.columns, key="rename_col_1")
+            new_name = st.text_input("新列名", value=rename_col, key="new_name_1")
+            if st.button("确认修改列名", key="btn_rename"):
+                df.rename(columns={rename_col: new_name}, inplace=True)
         # 删除行 + 唯一KEY
-        del_row = st.number_input("删除指定行号", min_value=0, max_value=len(df)-1, value=0, key="del_row_1")
-        if st.button("删除该行", key="btn_del_row"):
-            df = df.drop(index=df.index[del_row])
+        if len(df) == 0:
+            st.warning("当前没有可删除的行。")
+        else:
+            del_row = st.number_input("删除指定行号", min_value=0, max_value=len(df)-1, value=0, key="del_row_1")
+            if st.button("删除该行", key="btn_del_row"):
+                df = df.drop(index=df.index[del_row])
+
+if df.shape[1] == 0 or len(df) == 0:
+    st.divider()
+    st.warning("当前工作数据为空，请重置为原始数据或重新选择保留列。")
+    st.dataframe(df, use_container_width=True)
+    c_save, c_reset = st.columns(2)
+    with c_save:
+        if st.button("保存空数据状态", use_container_width=True, key="btn_save_empty"):
+            st.session_state.main_df = df.copy()
+            st.session_state._data_cleaned = True
+            st.success("已保存当前空数据状态。")
+    with c_reset:
+        if st.button("重置为原始数据", use_container_width=True, key="btn_reset_empty"):
+            if st.session_state.original_df is not None:
+                st.session_state._page3_working_df = st.session_state.original_df.copy()
+                st.session_state.main_df = st.session_state.original_df.copy()
+                st.session_state._data_cleaned = True
+                st.rerun()
+            else:
+                st.warning("⚠️ 暂无原始数据！请先上传数据后再重置。")
+    st.session_state._page3_working_df = df.copy()
+    st.stop()
 
 with st.expander("2. 数据类型修改"):
     st.subheader("转换列的数据类型")

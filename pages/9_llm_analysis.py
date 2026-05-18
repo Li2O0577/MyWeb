@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import json
 from pages._prepare import render_sidebar, data_uploader
 
 # 1. 配置页面
@@ -301,6 +302,7 @@ if send_btn:
         for msg in st.session_state.chat_messages:
             api_messages.append(dict(msg))
 
+        data_was_attached = False
         if not st.session_state.chat_data_sent and df is not None:
             if is_smart:
                 data_summary = build_data_summary(df)
@@ -309,6 +311,7 @@ if send_btn:
                 data_text = df.to_csv(index=False)
                 api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n--- Data (CSV) ---\n{data_text}"
             st.session_state.chat_data_sent = True
+            data_was_attached = True
 
         # 流式请求
         stream_container = st.container()
@@ -337,6 +340,8 @@ if send_btn:
 
                 if resp.status_code != 200:
                     st.session_state.chat_messages.pop()
+                    if data_was_attached:
+                        st.session_state.chat_data_sent = False
                     st.error(f"API 错误 [{resp.status_code}]: {resp.text}")
                     st.stop()
 
@@ -360,16 +365,24 @@ if send_btn:
                     st.rerun()
                 else:
                     st.session_state.chat_messages.pop()
+                    if data_was_attached:
+                        st.session_state.chat_data_sent = False
                     st.error("LLM 返回了空响应，请重试。")
 
             except requests.exceptions.Timeout:
                 st.session_state.chat_messages.pop()
+                if data_was_attached:
+                    st.session_state.chat_data_sent = False
                 st.error("请求超时，请缩短提示词后重试。")
             except requests.exceptions.ConnectionError:
                 st.session_state.chat_messages.pop()
+                if data_was_attached:
+                    st.session_state.chat_data_sent = False
                 st.error(f"连接失败，请检查 API 地址：{api_base}")
             except Exception as e:
                 st.session_state.chat_messages.pop()
+                if data_was_attached:
+                    st.session_state.chat_data_sent = False
                 st.error(f"未知错误：{e}")
 
 # 9. 使用说明
