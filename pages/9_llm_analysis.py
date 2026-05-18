@@ -67,16 +67,20 @@ def build_data_summary(df):
         lines.append("")
 
         if len(numeric_cols) >= 2:
-            corr = df[numeric_cols].corr()
-            corr_upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-            corr_pairs = corr_upper.stack().reset_index()
-            corr_pairs.columns = ["Col A", "Col B", "Correlation"]
-            corr_pairs["AbsCorr"] = corr_pairs["Correlation"].abs()
-            corr_top = corr_pairs.sort_values("AbsCorr", ascending=False).head(10)
-            if len(corr_top) > 0:
-                lines.append("### Top Correlations")
-                for _, row in corr_top.iterrows():
-                    lines.append(f"- {row['Col A']} vs {row['Col B']}: {row['Correlation']:.3f}")
+            if len(numeric_cols) <= 100:
+                corr = df[numeric_cols].corr()
+                corr_upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+                corr_pairs = corr_upper.stack().reset_index()
+                corr_pairs.columns = ["Col A", "Col B", "Correlation"]
+                corr_pairs["AbsCorr"] = corr_pairs["Correlation"].abs()
+                corr_top = corr_pairs.sort_values("AbsCorr", ascending=False).head(10)
+                if len(corr_top) > 0:
+                    lines.append("### Top Correlations")
+                    for _, row in corr_top.iterrows():
+                        lines.append(f"- {row['Col A']} vs {row['Col B']}: {row['Correlation']:.3f}")
+                    lines.append("")
+            else:
+                lines.append(f"### Top Correlations (skipped — {len(numeric_cols)} numeric columns too many)")
                 lines.append("")
 
     cat_cols = df.select_dtypes(exclude=[np.number]).columns

@@ -67,6 +67,8 @@ if df is not None:
     if chart_type == "散点图":
         with config_col:
             st.subheader("📊 散点图设置")
+            if len(numeric_cols) < 2:
+                st.warning("散点图需要至少 2 个数值列才有意义，当前只有 1 个数值列，X/Y 轴将相同。")
             x_col = st.selectbox("X 轴", numeric_cols if numeric_cols else all_cols)
             y_col = st.selectbox("Y 轴", numeric_cols if numeric_cols else all_cols,
                                  index=min(1, len(numeric_cols) - 1) if numeric_cols else 0)

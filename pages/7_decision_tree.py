@@ -49,7 +49,11 @@ if df is None:
     st.stop()
 
 # 数据预处理
+df_before = len(df)
 df_clean = df.dropna()
+dropped = df_before - len(df_clean)
+if dropped > 0:
+    st.warning(f"⚠️ 已自动丢弃 {dropped} 行含缺失值的数据（剩余 {len(df_clean)} 行 / {df_before} 行）。可在「数据处理」页面手动处理缺失值。")
 if len(df_clean) < 10 or df_clean.shape[1] < 2:
     st.error("❌ 数据无效！需要至少10行有效数据")
     st.stop()
@@ -188,15 +192,20 @@ with train_col:
             # 1. 数据划分
             X = df_clean[feature_cols]
             y = df_clean[target_col]
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-            # 2. 预处理流水线
-            preprocessor = ColumnTransformer(
-                transformers=[
-                    ("num", StandardScaler(), [c for c in numeric_cols if c in feature_cols]),
-                    ("cat", OneHotEncoder(handle_unknown="ignore"), [c for c in categorical_cols if c in feature_cols])
-                ]
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42,
+                stratify=y if is_cls else None
             )
+
+            # 2. 预处理流水线（按实际列类型动态构建，避免空 transformer 报错）
+            num_cols = [c for c in numeric_cols if c in feature_cols]
+            cat_cols = [c for c in categorical_cols if c in feature_cols]
+            transformers = []
+            if num_cols:
+                transformers.append(("num", StandardScaler(), num_cols))
+            if cat_cols:
+                transformers.append(("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols))
+            preprocessor = ColumnTransformer(transformers=transformers, remainder='passthrough')
 
             # 3. 决策树流水线（分类 or 回归）
             if is_cls:

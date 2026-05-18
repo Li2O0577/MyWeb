@@ -8,12 +8,14 @@ import os
 import pickle
 import json
 import copy
-import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, accuracy_score
 from torch.utils.data import TensorDataset, DataLoader
 from pages._prepare import render_sidebar, data_uploader
+from pages._mlp_common import (render_device_selector, check_constant_features,
+                                plot_loss_curve, save_model_files, clear_model_files,
+                                validate_input_array)
 
 # 1. Page config
 st.set_page_config(page_title="自定义 MLP", layout="wide", initial_sidebar_state="collapsed")
@@ -33,17 +35,7 @@ SCALER_PATH = os.path.join(MODEL_DIR, "diy_scaler.pkl")
 CONFIG_PATH = os.path.join(MODEL_DIR, "diy_config.json")
 
 # 2. 设备选择
-st.subheader("⚙️ 计算设备选择")
-device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
-if device_choice == "CUDA (GPU)":
-    if not torch.cuda.is_available():
-        st.error("❌ 当前环境未安装 CUDA，无法使用 GPU！请切换为 CPU")
-        st.stop()
-    device = torch.device("cuda")
-    st.success("✅ 已启用：CUDA GPU")
-else:
-    device = torch.device("cpu")
-    st.info("⚙️ 已启用：CPU")
+device = render_device_selector()
 
 # 3. 功能介绍
 with st.expander("📢 功能介绍", expanded=False):
@@ -82,6 +74,10 @@ feature_cols = [c for c in all_num_cols if c != target_col]
 n_features = len(feature_cols)
 n_samples = len(numeric_df)
 
+if n_features == 0:
+    st.warning("⚠️ 警告：选择的目标列覆盖了所有列，无可用特征列！请重新选择目标列")
+    st.stop()
+
 if task_type == "分类 (Classification)":
     n_classes = len(numeric_df[target_col].unique())
     if n_classes < 2:
@@ -93,6 +89,8 @@ if task_type == "分类 (Classification)":
 else:
     n_classes = None
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征")
+
+check_constant_features(numeric_df, feature_cols)
 
 # 6. 网络结构构建器
 st.subheader("🧱 网络结构设计")
@@ -478,9 +476,6 @@ with train_col:
                     acc = accuracy_score(y_test, y_pred_np)
 
             # 保存模型
-            torch.save(model.state_dict(), MODEL_PATH)
-            with open(SCALER_PATH, 'wb') as f:
-                pickle.dump(scaler, f)
             config_dict = {
                 "features": feature_cols,
                 "target": target_col,
@@ -488,12 +483,10 @@ with train_col:
                 "layers": st.session_state.diy_layers,
             }
             if task_type == "分类 (Classification)":
-                # 统一转为字符串键值，兼容 JSON 序列化与预测查找
                 config_dict["n_classes"] = n_classes
                 config_dict["label_map"] = {str(k): v for k, v in label_map.items()}
                 config_dict["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(config_dict, f, ensure_ascii=False)
+            save_model_files(model, scaler, config_dict, MODEL_PATH, SCALER_PATH, CONFIG_PATH)
 
             # 存入 session
             st.session_state.diy_model = model
@@ -512,21 +505,14 @@ with train_col:
                 st.success(f"训练完成！准确率 = {acc:.4f}")
 
             # 损失曲线
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=train_losses, mode='lines', name='训练损失'))
-            fig.add_trace(go.Scatter(y=val_losses, mode='lines', name='验证损失'))
-            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="训练轮次", yaxis_title="损失值",
-                              template="plotly_white", height=350)
-            st.plotly_chart(fig, use_container_width=True)
+            plot_loss_curve(train_losses, val_losses)
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
-        for p in [MODEL_PATH, SCALER_PATH, CONFIG_PATH]:
-            if os.path.exists(p):
-                os.remove(p)
-        for k in ["diy_model", "diy_scaler", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map"]:
-            if k in st.session_state:
-                del st.session_state[k]
+        clear_model_files(
+            [MODEL_PATH, SCALER_PATH, CONFIG_PATH],
+            ["diy_model", "diy_scaler", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map"]
+        )
         st.warning("已清除所有保存的模型！")
 
 # 12. 预测
@@ -569,6 +555,10 @@ else:
             model.eval()
             with torch.no_grad():
                 input_arr = np.array([input_data])
+                err = validate_input_array(input_arr, "单条预测")
+                if err:
+                    st.error(err)
+                    st.stop()
                 input_scaled = scaler.transform(input_arr)
                 input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
                 output = model(input_tensor)
@@ -611,32 +601,36 @@ else:
             st.error(f"缺少特征列：{missing_cols}")
         else:
             batch_X = batch_df[features].values
-            model.to(device)
-            model.eval()
-            with torch.no_grad():
-                batch_scaled = scaler.transform(batch_X)
-                batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
-                output = model(batch_tensor)
+            err = validate_input_array(batch_X, "批量预测")
+            if err:
+                st.error(err)
+            else:
+                model.to(device)
+                model.eval()
+                with torch.no_grad():
+                    batch_scaled = scaler.transform(batch_X)
+                    batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
+                    output = model(batch_tensor)
 
-                if task == "regression":
-                    predictions = output.cpu().numpy().flatten()
-                    result_df = batch_df.copy()
-                    result_df[f"预测_{target}"] = predictions
-                else:
-                    n_cls = st.session_state.diy_n_classes
-                    reverse_label_map = st.session_state.diy_reverse_label_map
-                    if n_cls == 2:
-                        probs = torch.sigmoid(output).cpu().numpy().flatten()
-                        pred_indices = (probs > 0.5).astype(int)
-                        confidences = np.where(pred_indices == 1, probs, 1 - probs)
+                    if task == "regression":
+                        predictions = output.cpu().numpy().flatten()
+                        result_df = batch_df.copy()
+                        result_df[f"预测_{target}"] = predictions
                     else:
-                        probs_all = torch.softmax(output, dim=1).cpu().numpy()
-                        pred_indices = np.argmax(probs_all, axis=1)
-                        confidences = probs_all[np.arange(len(pred_indices)), pred_indices]
-                    result_df = batch_df.copy()
-                    result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in pred_indices]
-                    result_df["置信度"] = confidences
+                        n_cls = st.session_state.diy_n_classes
+                        reverse_label_map = st.session_state.diy_reverse_label_map
+                        if n_cls == 2:
+                            probs = torch.sigmoid(output).cpu().numpy().flatten()
+                            pred_indices = (probs > 0.5).astype(int)
+                            confidences = np.where(pred_indices == 1, probs, 1 - probs)
+                        else:
+                            probs_all = torch.softmax(output, dim=1).cpu().numpy()
+                            pred_indices = np.argmax(probs_all, axis=1)
+                            confidences = probs_all[np.arange(len(pred_indices)), pred_indices]
+                        result_df = batch_df.copy()
+                        result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in pred_indices]
+                        result_df["置信度"] = confidences
 
-            st.dataframe(result_df, use_container_width=True)
-            csv = result_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)
+                st.dataframe(result_df, use_container_width=True)
+                csv = result_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)

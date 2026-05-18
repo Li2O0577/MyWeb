@@ -20,6 +20,9 @@ df = data_uploader(
 
 # 3. 异常值详情与修复
 if df is not None:
+    if len(df) == 0:
+        st.warning("⚠️ 当前数据为空（所有行已被删除）。请重新上传数据。")
+        st.stop()
     outlier_info = st.session_state.get("outliers", {})
 
     if outlier_info:

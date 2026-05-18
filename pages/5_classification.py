@@ -14,6 +14,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 from torch.utils.data import TensorDataset, DataLoader
 from pages._prepare import render_sidebar, data_uploader
+from pages._mlp_common import (render_device_selector, check_constant_features,
+                                plot_loss_curve, save_model_files, clear_model_files,
+                                validate_input_array)
 
 # 页面配置
 st.set_page_config(page_title="分类决策", layout="wide", initial_sidebar_state="collapsed")
@@ -33,20 +36,7 @@ MODEL_PATH = os.path.join(MODEL_DIR, "cls_best_model.pth")
 SCALER_PATH = os.path.join(MODEL_DIR, "cls_scaler.pkl")
 CONFIG_PATH = os.path.join(MODEL_DIR, "cls_config.json")
 
-st.subheader("⚙️ 计算设备选择")
-device_col1, device_col2 = st.columns(2)
-with device_col1:
-    device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
-# 设备校验逻辑（完全匹配分类页面，不符合立即报错）
-if device_choice == "CUDA (GPU)":
-    if not torch.cuda.is_available():
-        st.error("❌ 设备选择错误：当前环境未安装CUDA/GPU，无法使用CUDA！请切换为CPU")
-        st.stop()
-    device = torch.device("cuda")
-    st.success("✅ 已启用：CUDA GPU")
-else:
-    device = torch.device("cpu")
-    st.info("⚙️ 已启用：CPU")
+device = render_device_selector()
 
 # 功能介绍
 with st.expander("📢 功能介绍", expanded=True):
@@ -98,6 +88,7 @@ with col1:
         st.warning(f"⚠️ 警告：类别数接近样本数，可能过拟合！建议更换目标列")
     
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征 | {n_classes} 个类别")
+    check_constant_features(numeric_df, feature_cols)
 
 with col2:
     # 自适应网络结构
@@ -339,25 +330,16 @@ with train_col:
                     st.text(classification_report(y_test, y_pred, zero_division=0))
 
             # 训练/验证损失曲线
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=train_losses, mode='lines', name='训练损失', line=dict(color='#1f77b4')))
-            fig.add_trace(go.Scatter(y=val_losses, mode='lines', name='验证损失', line=dict(color='#ff7f0e')))
-            fig.update_layout(title="训练 & 验证损失曲线", xaxis_title="训练轮次", yaxis_title="损失值",
-                              template="plotly_white", height=350, margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+            plot_loss_curve(train_losses, val_losses)
 
             # 保存模型
-            torch.save(model.state_dict(), MODEL_PATH)
-            with open(SCALER_PATH, 'wb') as f:
-                pickle.dump(scaler, f)
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "features": [str(col) for col in feature_cols],
-                    "target": str(target_col),
-                    "n_classes": n_classes,
-                    "label_map": {str(k): v for k, v in label_map.items()},
-                    "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()}
-                }, f, ensure_ascii=False)
+            save_model_files(model, scaler, {
+                "features": [str(col) for col in feature_cols],
+                "target": str(target_col),
+                "n_classes": n_classes,
+                "label_map": {str(k): v for k, v in label_map.items()},
+                "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()}
+            }, MODEL_PATH, SCALER_PATH, CONFIG_PATH)
 
             # 保存到会话（键统一为字符串，兼容预测查找）
             st.session_state.cls_model = model
@@ -372,13 +354,10 @@ with train_col:
 # 清除模型
 with clear_col:
     if st.button("清除已保存分类模型", use_container_width=True):
-        for p in [MODEL_PATH, SCALER_PATH, CONFIG_PATH]:
-            if os.path.exists(p):
-                os.remove(p)
-        keys = ["cls_model", "cls_scaler", "cls_features", "cls_target", "cls_classes", "reverse_label_map"]
-        for k in keys:
-            if k in st.session_state:
-                del st.session_state[k]
+        clear_model_files(
+            [MODEL_PATH, SCALER_PATH, CONFIG_PATH],
+            ["cls_model", "cls_scaler", "cls_features", "cls_target", "cls_classes", "reverse_label_map"]
+        )
         st.warning("已清除分类模型！")
 
 # 预测功能（修复标签映射）
@@ -407,6 +386,10 @@ else:
         model.eval()
         with torch.no_grad():
             input_arr = np.array([input_data])
+            err = validate_input_array(input_arr, "单条预测")
+            if err:
+                st.error(err)
+                st.stop()
             input_scaled = scaler.transform(input_arr)
             input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
             output = model(input_tensor)
@@ -433,25 +416,29 @@ else:
             st.error(f"缺少特征列：{missing_cols}")
         else:
             batch_X = batch_df[features].values
-            model.to(device)
-            model.eval()
-            with torch.no_grad():
-                batch_scaled = scaler.transform(batch_X)
-                batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
-                output = model(batch_tensor)
+            err = validate_input_array(batch_X, "批量预测")
+            if err:
+                st.error(err)
+            else:
+                model.to(device)
+                model.eval()
+                with torch.no_grad():
+                    batch_scaled = scaler.transform(batch_X)
+                    batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
+                    output = model(batch_tensor)
 
-                if n_classes == 2:
-                    probs = torch.sigmoid(output).cpu().numpy().flatten()
-                    pred_indices = (probs > 0.5).astype(int)
-                    confidences = np.where(pred_indices == 1, probs, 1 - probs)
-                else:
-                    probs_all = torch.softmax(output, dim=1).cpu().numpy()
-                    pred_indices = np.argmax(probs_all, axis=1)
-                    confidences = probs_all[np.arange(len(pred_indices)), pred_indices]
+                    if n_classes == 2:
+                        probs = torch.sigmoid(output).cpu().numpy().flatten()
+                        pred_indices = (probs > 0.5).astype(int)
+                        confidences = np.where(pred_indices == 1, probs, 1 - probs)
+                    else:
+                        probs_all = torch.softmax(output, dim=1).cpu().numpy()
+                        pred_indices = np.argmax(probs_all, axis=1)
+                        confidences = probs_all[np.arange(len(pred_indices)), pred_indices]
 
-            result_df = batch_df.copy()
-            result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in pred_indices]
-            result_df["置信度"] = confidences
-            st.dataframe(result_df, use_container_width=True)
-            csv = result_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)
+                result_df = batch_df.copy()
+                result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in pred_indices]
+                result_df["置信度"] = confidences
+                st.dataframe(result_df, use_container_width=True)
+                csv = result_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)

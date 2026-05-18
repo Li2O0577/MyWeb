@@ -109,8 +109,9 @@ def data_uploader(warn_outliers=True, force_cached=False):
         # force_cached 或 _data_cleaned：使用缓存数据
         if 'main_df' in st.session_state:
             df = st.session_state['main_df']
-            outlier_info = detect_outliers(df)
-            st.session_state.outliers = outlier_info
+            if 'outliers' not in st.session_state:
+                st.session_state.outliers = detect_outliers(df)
+            outlier_info = st.session_state.outliers
             if warn_outliers and outlier_info:
                 total = sum(v["count"] for v in outlier_info.values())
                 cols = len(outlier_info)
@@ -123,8 +124,9 @@ def data_uploader(warn_outliers=True, force_cached=False):
     # 如果之前已经上传过数据（且 file_uploader 已被清除），返回缓存
     if 'main_df' in st.session_state:
         df = st.session_state['main_df']
-        outlier_info = detect_outliers(df)
-        st.session_state.outliers = outlier_info
+        if 'outliers' not in st.session_state:
+            st.session_state.outliers = detect_outliers(df)
+        outlier_info = st.session_state.outliers
         if warn_outliers and outlier_info:
             total = sum(v["count"] for v in outlier_info.values())
             cols = len(outlier_info)
