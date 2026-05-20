@@ -161,7 +161,7 @@ Write-Host "cd backend && python app.py" -ForegroundColor White
 Write-Host "  🎨 启动前端 (Streamlit)： " -ForegroundColor Cyan -NoNewline
 Write-Host "cd .. && streamlit run main.py" -ForegroundColor White
 Write-Host ""
-Write-Host "  Flask 后端: http://localhost:5000" -ForegroundColor Gray
+Write-Host "  Flask 后端: http://localhost:5001" -ForegroundColor Gray
 Write-Host "  Streamlit 前端: http://localhost:8501" -ForegroundColor Gray
 Write-Host ""
 

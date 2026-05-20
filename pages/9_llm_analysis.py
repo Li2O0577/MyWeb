@@ -4,14 +4,51 @@ import pandas as pd
 import numpy as np
 import json
 from pages._prepare import render_sidebar, data_uploader
-from pages._api import chat_llm, get_summary
+from pages._api import chat_llm, get_summary, backend_status_badge, render_backend_sync_panel
 
 st.set_page_config(page_title="大模型分析", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/9_llm_analysis.py")
 st.title("🤖 大模型分析")
 
+backend_status_badge()
+
 df = data_uploader(upload_to_backend=False)
+
+if df is None:
+    st.info("👋 请先在「📊 数据加载」页面上传数据，然后再使用大模型分析功能。")
+    st.stop()
+
+render_backend_sync_panel(df)
+
+
+def _local_data_summary(df):
+    """Build a comprehensive data summary locally when no backend session is available."""
+    import io
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    cat_cols = df.select_dtypes(exclude=[np.number]).columns
+
+    buf = io.StringIO()
+    buf.write(f"## Data Summary\n\n**Rows:** {len(df)}  |  **Columns:** {len(df.columns)}\n\n")
+
+    if len(numeric_cols) > 0:
+        buf.write(f"### Numeric Columns ({len(numeric_cols)})\n")
+        for c in numeric_cols[:20]:
+            s = df[c]
+            buf.write(f"- **{c}**: mean={s.mean():.2f}, std={s.std():.2f}, min={s.min():.2f}, max={s.max():.2f}, missing={s.isna().sum()}\n")
+        if len(numeric_cols) > 20:
+            buf.write(f"... and {len(numeric_cols) - 20} more numeric columns\n")
+
+    if len(cat_cols) > 0:
+        buf.write(f"\n### Categorical Columns ({len(cat_cols)})\n")
+        for c in cat_cols[:10]:
+            s = df[c]
+            buf.write(f"- **{c}**: unique={s.nunique()}, missing={s.isna().sum()}\n")
+        if len(cat_cols) > 10:
+            buf.write(f"... and {len(cat_cols) - 10} more categorical columns\n")
+
+    return buf.getvalue()
+
 
 SKILL_INFO = """
 ## Available Analysis Skills in This Platform
@@ -141,9 +178,9 @@ if send_btn:
                     if summary_resp:
                         data_summary = summary_resp.get("summary", "")
                     else:
-                        data_summary = f"Data: {df.shape[0]} rows × {df.shape[1]} columns"
+                        data_summary = _local_data_summary(df)
                 else:
-                    data_summary = f"Data: {df.shape[0]} rows × {df.shape[1]} columns\nColumns: {', '.join(str(c) for c in df.columns)}"
+                    data_summary = _local_data_summary(df)
                 api_messages[-1]["content"] = f"{api_messages[-1]['content']}\n\n---\n\n{data_summary}"
             else:
                 data_text = df.to_csv(index=False)
@@ -178,7 +215,15 @@ if send_btn:
                             st.session_state.chat_messages.pop()
                             if data_was_attached:
                                 st.session_state.chat_data_sent = False
-                            st.error(f"API 错误: {event['error']}")
+                            err = event["error"]
+                            if isinstance(err, dict):
+                                code = err.get("code", "ERROR")
+                                message = err.get("message", "请求失败")
+                                detail = err.get("detail", "")
+                                suffix = f" ({detail})" if detail and detail != message else ""
+                                st.error(f"API 错误: {code}: {message}{suffix}")
+                            else:
+                                st.error(f"API 错误: {err}")
                             st.stop()
                         if event.get("done"):
                             break

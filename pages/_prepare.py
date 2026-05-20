@@ -1,8 +1,10 @@
 """Shared Streamlit utilities — adapted for Flask backend."""
+import hashlib
+import io
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pages._api import upload_data, get_outliers
+from pages._api import upload_data, try_upload_backend
 
 
 def hide_native_sidebar():
@@ -47,18 +49,27 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
 
     if uploaded_file is not None:
         current_name = uploaded_file.name
+        raw_bytes = uploaded_file.getvalue()
+        current_hash = hashlib.sha256(raw_bytes).hexdigest()
 
-        if current_name != st.session_state.get("_source_file", ""):
+        if current_hash != st.session_state.get("_source_file_hash", ""):
             st.session_state._source_file = current_name
+            st.session_state._source_file_hash = current_hash
             st.session_state._data_cleaned = False
+            st.session_state._data_loaded = False
             st.session_state.pop("session_id", None)
+            st.session_state.pop("session_meta", None)
+            # Save raw bytes for efficient re-upload
+            st.session_state._raw_file_bytes = raw_bytes
+            st.session_state._raw_file_name = uploaded_file.name
 
-        if not force_cached and not st.session_state.get("_data_cleaned", False):
+        if not force_cached and not st.session_state.get("_data_loaded", False):
             try:
+                # 1. Read file locally — always fast, never blocks
                 if uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
+                    df = pd.read_csv(io.BytesIO(raw_bytes))
                 else:
-                    df = pd.read_excel(uploaded_file)
+                    df = pd.read_excel(io.BytesIO(raw_bytes))
 
                 with st.expander("🛠️ 快速操作"):
                     col1, col2 = st.columns(2)
@@ -73,18 +84,16 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                     if to_drop:
                         df = df.drop(columns=to_drop)
 
-                # Upload to Flask backend
-                if upload_to_backend and "session_id" not in st.session_state:
-                    uploaded_file.seek(0)
-                    result = upload_data(uploaded_file.read(), uploaded_file.name)
-                    if result:
-                        st.session_state.session_id = result["session_id"]
-                        st.session_state.backend_data = result
-
+                # 2. Store df locally FIRST — data is immediately available to all pages
                 outlier_info = detect_outliers(df)
                 st.session_state.outliers = outlier_info
                 st.session_state['main_df'] = df
+                st.session_state._data_loaded = True
                 st.success(f"成功加载: {uploaded_file.name}")
+
+                # 3. Try Flask backend upload — non-blocking, fails fast (2s connect timeout)
+                if upload_to_backend and "session_id" not in st.session_state:
+                    try_upload_backend(raw_bytes, uploaded_file.name)
 
                 if warn_outliers and outlier_info:
                     total = sum(v["count"] for v in outlier_info.values())
@@ -102,7 +111,8 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
 
         if 'main_df' in st.session_state:
             df = st.session_state['main_df']
-            if 'outliers' not in st.session_state:
+            # Re-detect outliers after data was cleaned (indices/bounds may have changed)
+            if force_cached or 'outliers' not in st.session_state:
                 st.session_state.outliers = detect_outliers(df)
             outlier_info = st.session_state.outliers
             if warn_outliers and outlier_info:

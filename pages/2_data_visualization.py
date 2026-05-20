@@ -15,6 +15,7 @@ df = data_uploader(upload_to_backend=False)
 
 if df is not None:
     st.success("数据加载成功！现在可以创建可视化图表。")
+    df = df.copy()  # Don't mutate shared session state
     df.columns = df.columns.astype(str)
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()

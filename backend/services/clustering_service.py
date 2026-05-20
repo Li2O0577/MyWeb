@@ -17,7 +17,10 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "cluster_config.json")
 
 def train(df, feature_cols, algorithm, params):
     """Train clustering model. Returns labels, metrics, and PCA coords for plotting."""
-    X = df[feature_cols].values
+    df = df[feature_cols].dropna()
+    if len(df) < 10:
+        return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
+    X = df.values
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -35,12 +38,13 @@ def train(df, feature_cols, algorithm, params):
         if n_found == 0:
             return None, "DBSCAN 将所有点标记为噪声！请增大 eps 或减小 min_samples 后重试。"
 
-    # Silhouette score
+    # Silhouette score (requires >= 2 samples AND >= 2 unique labels)
     sil = None
     valid_mask = cluster_labels != -1
-    if valid_mask.sum() >= 2:
+    valid_labels = cluster_labels[valid_mask]
+    if valid_mask.sum() >= 2 and len(np.unique(valid_labels)) >= 2:
         if valid_mask.sum() <= 5000:
-            sil = float(silhouette_score(X_scaled[valid_mask], cluster_labels[valid_mask]))
+            sil = float(silhouette_score(X_scaled[valid_mask], valid_labels))
         else:
             rng = np.random.default_rng(42)
             sample_idx = rng.choice(valid_mask.sum(), size=5000, replace=False)

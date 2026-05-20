@@ -36,17 +36,6 @@ def validate_input_array(arr, context=""):
     return None
 
 
-def _to_python_type(val):
-    """Convert numpy scalar to native Python type for JSON serialization."""
-    if isinstance(val, (np.integer,)):
-        return int(val)
-    if isinstance(val, (np.floating,)):
-        return float(val)
-    if isinstance(val, (np.bool_,)):
-        return bool(val)
-    return val
-
-
 # ── Constant feature detection ──
 
 def check_constant_features(df, feature_cols):

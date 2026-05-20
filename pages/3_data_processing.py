@@ -16,7 +16,7 @@ df_source = data_uploader(upload_to_backend=False)
 if "original_df" not in st.session_state:
     st.session_state.original_df = None
 if df_source is not None:
-    current_source = st.session_state.get("_source_file", None)
+    current_source = st.session_state.get("_source_file_hash") or st.session_state.get("_source_file", None)
     if st.session_state.get("_3_snapshot_source") != current_source:
         st.session_state.original_df = df_source.copy()
         st.session_state._3_snapshot_source = current_source
@@ -202,14 +202,19 @@ with ctrl1:
     if st.button("保存修改", use_container_width=True, key="btn_save"):
         st.session_state.main_df = df.copy()
         st.session_state._data_cleaned = True
-        # Sync to backend for ML training
-        from pages._api import upload_data
-        import io
-        csv_bytes = df.to_csv(index=False).encode('utf-8')
-        result = upload_data(csv_bytes, "processed_data.csv")
-        if result:
-            st.session_state.session_id = result["session_id"]
-        st.success("已保存！修改不会因切换页面而丢失。")
+        # Sync to backend for ML training (fast-connect, won't block UI)
+        from pages._api import sync_session_data, try_upload_backend
+        sid = st.session_state.get("session_id")
+        if sid:
+            ok = sync_session_data(sid, df)
+        else:
+            import io
+            csv_bytes = df.to_csv(index=False).encode('utf-8')
+            ok = try_upload_backend(csv_bytes, "processed_data.csv")
+        if ok:
+            st.success("已保存！修改不会因切换页面而丢失。")
+        else:
+            st.warning("数据已保存到前端，但后端同步失败。ML 训练可能使用旧数据。")
 
 with ctrl2:
     if st.button("重置为原始数据", use_container_width=True, key="btn_reset"):

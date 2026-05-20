@@ -38,6 +38,10 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     """Train classification MLP. Returns metrics + losses + cm."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
 
+    cols = feature_cols + [target_col]
+    df = df[cols].dropna()
+    if len(df) < 10:
+        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
     y_raw = df[target_col].values
     unique_labels = np.unique(y_raw)
     label_map = {lbl: i for i, lbl in enumerate(unique_labels)}
@@ -47,12 +51,24 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
 
     X = df[feature_cols].values
 
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=0.2, random_state=42, stratify=y_temp
-    )
+    try:
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=0.2, random_state=42, stratify=y_temp
+        )
+    except ValueError as e:
+        # Fallback: split without stratification (some classes may have too few samples)
+        if "stratify" in str(e).lower() or "class" in str(e).lower():
+            X_temp, X_test, y_temp, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_temp, y_temp, test_size=0.2, random_state=42
+            )
+        else:
+            raise
 
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)

@@ -19,6 +19,10 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "dt_config.json")
 def train(df, target_col, feature_cols, task_type, criterion, max_depth):
     """Train decision tree. Returns metrics."""
     is_cls = (task_type == "classification")
+    cols = feature_cols + [target_col]
+    df = df[cols].dropna()
+    if len(df) < 10:
+        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
     X = df[feature_cols]
     y = df[target_col]
 

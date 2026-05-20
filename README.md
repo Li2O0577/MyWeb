@@ -20,7 +20,7 @@
     │
     ├── Streamlit (:8501) ── UI 渲染、Plotly 图表、用户交互
     │         │
-    │         └── HTTP/JSON ── Flask (:5000) ── ML 训练、模型推理、数据解析
+    │         └── HTTP/JSON ── Flask (:5001) ── ML 训练、模型推理、数据解析
     │
     └── Flask SSE ── LLM 流式聊天
 ```
@@ -41,19 +41,60 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 脚本自动检测 GPU 并安装对应 PyTorch 版本（CUDA 11.8 / 12.1 / 12.8 / CPU）。
 
+### 环境要求
+
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Python | 3.10+ | |
+| Flask | **3.1.3** | 必须与此版本一致！高了低了都可能和 Werkzeug 不兼容 |
+| Werkzeug | 3.1.x | Flask 3.1.3 的配套版本，自动安装 |
+| flask-cors | 4.0+ | 跨域支持 |
+| PyTorch | 2.0+ | 建议 GPU 版，CPU 版训练较慢 |
+| pandas | 2.0+ | |
+| scikit-learn | 1.3+ | |
+| Streamlit | 1.28+ | 前端 |
+
+> **⚠️ 如果遇到 `ImportError: cannot import name 'url_quote' from 'werkzeug.urls'`**
+> 
+> 这是 Flask 版本太旧而 Werkzeug 太新导致的。执行以下修复：
+> ```bash
+> pip install --upgrade flask
+> ```
+
+### 依赖文件
+
+- `requirements.txt` — 前端依赖（Streamlit + 可视化）
+- `backend/requirements.txt` — 后端依赖（Flask + PyTorch + sklearn）
+- `setup.ps1` — 一键安装脚本，自动检测 GPU
+
 ### 2. 启动
+
+推荐双击运行：
+
+```bash
+start.bat
+```
+
+启动脚本会优先使用 `ml0` conda 环境，自动等待 Flask 后端健康检查通过后再启动 Streamlit。
+
+也可以手动启动：
 
 ```bash
 # 终端 1 — 启动 Flask 后端
 cd backend
 python app.py
-# → http://localhost:5000
+# → http://localhost:5001
 
 # 终端 2 — 启动 Streamlit 前端
 cd ..
 streamlit run main.py
 # → http://localhost:8501
 ```
+
+可选配置：
+
+- 后端端口：设置环境变量 `FLASK_PORT`，默认 `5001`
+- 前端 API 地址：设置环境变量 `INDETERMINATE_API_BASE`，默认 `http://127.0.0.1:5001/api`
 
 ### 3. 使用
 
@@ -109,10 +150,23 @@ MyWeb1/
 
 ## API 概览
 
+错误响应统一为：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "SESSION_EXPIRED",
+    "message": "Session not found or expired",
+    "detail": "Upload or sync the current dataset again before running this operation."
+  }
+}
+```
+
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/health` | GET | 健康检查 |
-| `/api/data/upload` | POST | 上传 CSV/Excel，返回 session_id |
+| `/api/health` | GET | 健康检查，返回活跃 session 数、最近 session 元信息、已保存模型 |
+| `/api/data/upload` | POST | 上传 CSV/Excel，返回 session_id 和 session_meta |
 | `/api/data/<sid>/process` | POST | 数据处理操作 |
 | `/api/data/<sid>/summary` | GET | 数据摘要（LLM 用） |
 | `/api/regression/train` | POST | 训练回归模型 |

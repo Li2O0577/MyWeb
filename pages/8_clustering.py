@@ -4,12 +4,14 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pages._prepare import render_sidebar, data_uploader
-from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering
+from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering, ensure_session, clustering_status, backend_status_badge, render_backend_sync_panel
 
 st.set_page_config(page_title="聚类分析", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/8_clustering.py")
 st.title("🧪 聚类分析")
+
+backend_status_badge()
 
 with st.expander("📢 功能介绍", expanded=True):
     st.markdown("""
@@ -29,12 +31,24 @@ if len(numeric_df) < 10 or numeric_df.shape[1] < 1:
     st.error("❌ 数据无效！需要至少10行数值数据")
     st.stop()
 
+render_backend_sync_panel(numeric_df)
+
 feature_cols = [col for col in numeric_df.columns]
 n_features = len(feature_cols)
 n_samples = len(numeric_df)
 
 if "cluster_algorithm" not in st.session_state:
     st.session_state.cluster_algorithm = "kmeans"
+
+# Auto-detect saved model
+if "cluster_result" not in st.session_state:
+    status = clustering_status()
+    if status and status.get("has_model"):
+        st.session_state.cluster_result = {}
+        st.session_state.cluster_features = status.get("features", [])
+        if status.get("algorithm") == "dbscan":
+            st.session_state.cluster_algorithm = "dbscan"
+        st.success(f"✅ 已自动加载上次保存的聚类模型（{status.get('algorithm', 'kmeans')}）")
 
 st.subheader("⚙️ 算法选择与参数配置")
 alg_col, *param_cols = st.columns([1, 1, 1, 2])
@@ -62,11 +76,12 @@ if is_kmeans:
         run_elbow = st.button("运行肘部分析", use_container_width=True, type="secondary")
 
     if run_elbow:
-        if "session_id" not in st.session_state:
-            st.error("⚠️ 请先在「数据加载」页面重新上传数据以初始化后端会话。")
-        else:
-            with st.spinner("正在计算..."):
-                result = elbow_clustering(st.session_state.session_id, [str(c) for c in feature_cols], max_k_elbow)
+        with st.spinner("正在计算..."):
+            sid = ensure_session(numeric_df)
+            if not sid:
+                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+            else:
+                result = elbow_clustering(sid, [str(c) for c in feature_cols], max_k_elbow)
                 if result:
                     st.session_state.elbow_result = result
 
@@ -93,34 +108,34 @@ train_col, clear_col = st.columns(2)
 
 with train_col:
     if st.button("开始聚类训练" if "cluster_result" not in st.session_state else "重新训练", type="primary", use_container_width=True):
-        if "session_id" not in st.session_state:
-            st.error("⚠️ 请先在「数据加载」页面重新上传数据以初始化后端会话。")
-        else:
-            with st.spinner("聚类训练中（后端 Flask 计算）..."):
-                algo = "kmeans" if is_kmeans else "dbscan"
-                params = {"n_clusters": n_clusters} if is_kmeans else {"eps": eps, "min_samples": min_samples}
-                result, err = None, "Unknown error"
-                resp = train_clustering(st.session_state.session_id, [str(c) for c in feature_cols], algo, params)
-                if resp:
-                    if "error" not in resp:
-                        result = resp
-                        st.session_state.cluster_result = result
-                        st.session_state.cluster_features = feature_cols
+        with st.spinner("聚类训练中（后端 Flask 计算）..."):
+            sid = ensure_session(numeric_df)
+            if not sid:
+                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.stop()
+            algo = "kmeans" if is_kmeans else "dbscan"
+            params = {"n_clusters": n_clusters} if is_kmeans else {"eps": eps, "min_samples": min_samples}
+            resp = train_clustering(sid, [str(c) for c in feature_cols], algo, params)
+            if resp:
+                if "error" not in resp:
+                    result = resp
+                    st.session_state.cluster_result = result
+                    st.session_state.cluster_features = feature_cols
 
-                        if is_kmeans:
-                            msg = f"✅ 聚类完成！分为 {result['n_found']} 个簇"
-                            if result.get("silhouette"):
-                                msg += f" | 轮廓系数: {result['silhouette']:.4f}"
-                                msg += f" | Inertia: {result['inertia']:,.2f}"
-                            st.success(msg)
-                        else:
-                            noise = sum(1 for l in result["labels"] if l == -1)
-                            msg = f"✅ 聚类完成！发现 {result['n_found']} 个簇 + {noise} 个噪声点"
-                            if result.get("silhouette"):
-                                msg += f" | 轮廓系数: {result['silhouette']:.4f}"
-                            st.success(msg)
+                    if is_kmeans:
+                        msg = f"✅ 聚类完成！分为 {result['n_found']} 个簇"
+                        if result.get("silhouette"):
+                            msg += f" | 轮廓系数: {result['silhouette']:.4f}"
+                            msg += f" | Inertia: {result['inertia']:,.2f}"
+                        st.success(msg)
                     else:
-                        st.error(resp["error"])
+                        noise = sum(1 for l in result["labels"] if l == -1)
+                        msg = f"✅ 聚类完成！发现 {result['n_found']} 个簇 + {noise} 个噪声点"
+                        if result.get("silhouette"):
+                            msg += f" | 轮廓系数: {result['silhouette']:.4f}"
+                        st.success(msg)
+                else:
+                    st.error(resp["error"])
 
 with clear_col:
     if st.button("清除已保存聚类模型", use_container_width=True):
@@ -174,10 +189,18 @@ else:
     st.info(f"✅ K-means 模型已训练")
     st.write("请输入特征值，预测所属簇：")
     input_data = []
-    cols = st.columns(len(features))
+    cols = st.columns(min(len(features), 5))
     for i, col in enumerate(cols):
         val = col.number_input(f"特征 {features[i]}", value=0.0, step=0.1)
         input_data.append(val)
+    if len(features) > 5:
+        for row_start in range(5, len(features), 5):
+            cols = st.columns(5)
+            for j, col in enumerate(cols):
+                idx = row_start + j
+                if idx < len(features):
+                    val = col.number_input(f"特征 {features[idx]}", value=0.0, step=0.1, key=f"cluster_pred_{idx}")
+                    input_data.append(val)
     if st.button("执行聚类预测", use_container_width=True):
         result = predict_clustering(input_data)
         if result and "cluster" in result:

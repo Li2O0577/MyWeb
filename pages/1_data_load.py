@@ -76,6 +76,7 @@ else:
             if st.button("🔄 重新加载原始数据", use_container_width=True):
                 st.session_state._data_cleaned = False
                 st.session_state._source_file = ""
+                st.session_state._source_file_hash = ""
                 st.rerun()
     else:
         st.success("数据加载成功！可导航到其他页面进行可视化、处理或建模。")

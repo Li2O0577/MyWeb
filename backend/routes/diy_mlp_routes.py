@@ -1,7 +1,9 @@
 """DIY MLP training & prediction API routes."""
 from flask import Blueprint, request, jsonify
+from routes._helpers import coerce_columns_like
+from routes._responses import missing_field, session_expired, service_error
 from services.diy_mlp_service import train, predict_one, predict_batch
-from app import get_session
+from session_store import get_session
 
 diy_bp = Blueprint("diy_mlp", __name__)
 
@@ -9,7 +11,7 @@ diy_bp = Blueprint("diy_mlp", __name__)
 def _require(data, *keys):
     for k in keys:
         if k not in data:
-            return jsonify({"error": f"Missing required field: {k}"}), 400
+            return missing_field(k)
     return None
 
 
@@ -21,33 +23,58 @@ def train_model():
     sid = data["session_id"]
     df = get_session(sid)
     if df is None:
-        return jsonify({"error": "Session not found or expired"}), 404
+        return session_expired()
+
+    target_col = data["target_col"]
+    feature_cols = coerce_columns_like(df, data["feature_cols"])
 
     result = train(
-        df, data["target_col"], data["feature_cols"], data["layers"],
+        df, target_col, feature_cols, data["layers"],
         data["task_type"], data["n_classes"], data["learning_rate"],
         data["optimizer"], data["epochs"], data["batch_size"],
         data["val_split"], data["patience"], data.get("device", "cpu")
     )
+    if "error" in result:
+        return service_error("TRAINING_FAILED", result["error"], 400)
     return jsonify(result)
 
 
 @diy_bp.route("/predict", methods=["POST"])
 def predict():
-    data = request.json
+    data = request.json or {}
+    if "features" not in data:
+        return missing_field("features")
     result, err = predict_one(data["features"], data.get("device", "cpu"))
     if err:
-        return jsonify({"error": err}), 404
+        return service_error("MODEL_NOT_FOUND", err, 404)
     return jsonify(result)
 
 
 @diy_bp.route("/batch_predict", methods=["POST"])
 def batch_predict():
-    data = request.json
+    data = request.json or {}
+    if "rows" not in data:
+        return missing_field("rows")
     result, err = predict_batch(data["rows"], data.get("device", "cpu"))
     if err:
-        return jsonify({"error": err}), 404
+        return service_error("MODEL_NOT_FOUND", err, 404)
     return jsonify(result)
+
+
+@diy_bp.route("/status", methods=["GET"])
+def model_status():
+    import os, json
+    base = os.path.dirname(os.path.dirname(__file__))
+    config_path = os.path.join(base, "models", "diy_config.json")
+    model_path = os.path.join(base, "models", "diy_best_model.pth")
+    if not os.path.exists(config_path) or not os.path.exists(model_path):
+        return jsonify({"has_model": False})
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    return jsonify({"has_model": True, "features": config.get("features", []),
+                    "target": config.get("target", ""), "task": config.get("task"),
+                    "n_classes": config.get("n_classes"), "layers": config.get("layers"),
+                    "reverse_label_map": config.get("reverse_label_map", {})})
 
 
 @diy_bp.route("/clear", methods=["POST"])

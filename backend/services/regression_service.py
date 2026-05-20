@@ -37,6 +37,10 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     """Train regression MLP. Returns {r2, mae, rmse, train_losses, val_losses}."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
 
+    cols = feature_cols + [target_col]
+    df = df[cols].dropna()
+    if len(df) < 10:
+        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
     X = df[feature_cols].values
     y = df[target_col].values.reshape(-1, 1)
 
@@ -117,7 +121,8 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
             "target": target_col,
             "hidden1": hidden1,
             "hidden2": hidden2,
-            "dropout_rate": dropout_rate
+            "dropout_rate": dropout_rate,
+            "r2": r2, "mae": mae, "rmse": rmse
         }, f, ensure_ascii=False)
 
     return {"r2": r2, "mae": mae, "rmse": rmse,
@@ -148,7 +153,7 @@ def predict_one(feature_values, device_str="cpu"):
     input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
     with torch.no_grad():
         pred = model(input_tensor).item()
-    return float(pred), None
+    return {"result": float(pred)}, None
 
 
 def predict_batch(rows, device_str="cpu"):
@@ -175,4 +180,4 @@ def predict_batch(rows, device_str="cpu"):
     batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)
     with torch.no_grad():
         preds = model(batch_tensor).cpu().numpy().flatten().tolist()
-    return preds, None
+    return {"predictions": preds}, None

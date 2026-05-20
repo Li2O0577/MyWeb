@@ -4,13 +4,14 @@ import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
 from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array
-from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp
+from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel
 
 st.set_page_config(page_title="自定义 MLP", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/6_diy_mlp.py")
 st.title("🛠️ 自定义神经网络")
 
+backend_status_badge()
 device = render_device_selector()
 
 with st.expander("📢 功能介绍", expanded=False):
@@ -26,31 +27,43 @@ if df is None:
     st.warning("⚠️ 请先上传数据！")
     st.stop()
 
-numeric_df = df.select_dtypes(include=[np.number]).dropna()
-if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
-    st.error("❌ 数据无效！需要至少 2 列数值 + 10 行数据")
+numeric_df = df.select_dtypes(include=[np.number]).dropna().copy()
+if len(numeric_df) < 2 or len(numeric_df.columns) < 1:
+    st.error("❌ 数据无效！需要至少 1 列数值数据作为特征")
     st.stop()
+
+df_clean = df.dropna()
+if len(df_clean) < 10:
+    st.error("❌ 数据无效！删除缺失值后不足10行")
+    st.stop()
+
+render_backend_sync_panel(df_clean)
 
 numeric_df.columns = numeric_df.columns.astype(str)
 all_num_cols = list(numeric_df.columns)
+all_cols = list(df.columns)
 
 st.subheader("📊 任务配置")
 task_col1, task_col2 = st.columns(2)
 with task_col1:
     task_type = st.selectbox("任务类型", ["回归 (Regression)", "分类 (Classification)"], index=0)
 with task_col2:
-    target_col = st.selectbox("选择目标列", all_num_cols, index=len(all_num_cols) - 1)
+    if "分类" in task_type:
+        target_options = all_cols
+    else:
+        target_options = all_num_cols
+    target_col = st.selectbox("选择目标列", target_options, index=len(target_options) - 1)
 
 feature_cols = [c for c in all_num_cols if c != target_col]
 n_features = len(feature_cols)
-n_samples = len(numeric_df)
+n_samples = len(df_clean)
 
 if n_features == 0:
     st.warning("⚠️ 警告：选择的目标列覆盖了所有列，无可用特征列！请重新选择目标列")
     st.stop()
 
 if task_type == "分类 (Classification)":
-    n_classes = len(numeric_df[target_col].unique())
+    n_classes = len(df_clean[target_col].unique())
     if n_classes < 2:
         st.error("❌ 目标列类别数 < 2，无法分类！")
         st.stop()
@@ -62,6 +75,23 @@ else:
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征")
 
 check_constant_features(numeric_df, feature_cols)
+
+# Auto-detect saved model
+if "diy_result" not in st.session_state:
+    status = diy_mlp_status()
+    if status and status.get("has_model"):
+        st.session_state.diy_result = {"train_losses": [], "val_losses": []}
+        st.session_state.diy_features = status.get("features", [])
+        st.session_state.diy_target = status.get("target", "")
+        st.session_state.diy_task = status.get("task", "regression")
+        if st.session_state.diy_task == "classification":
+            st.session_state.diy_n_classes = status.get("n_classes", 2)
+            st.session_state.diy_reverse_label_map = status.get("reverse_label_map", {})
+        # Restore layers from saved config
+        saved_layers = status.get("layers", [])
+        if saved_layers and "diy_layers" not in st.session_state:
+            st.session_state.diy_layers = saved_layers
+        st.success(f"✅ 已自动加载上次保存的模型（目标列：{st.session_state.diy_target}）")
 
 # ── Layer builder UI ──
 st.subheader("🧱 网络结构设计")
@@ -144,6 +174,18 @@ elif total_params > n_samples * 0.5:
     warnings.append(f"🟡 过拟合风险：参数量 ({total_params:,}) 超过训练样本数 ({n_samples}) 的一半。")
 elif total_params < max(8, n_features):
     warnings.append(f"🟡 欠拟合风险：参数量 ({total_params:,}) 过少。")
+
+# Check for gradient vanishing risk (3+ sigmoid/tanh layers)
+vanishing_acts = ["Sigmoid", "Tanh"]
+n_vanishing = sum(1 for l in st.session_state.diy_layers if l["activation"] in vanishing_acts)
+if n_vanishing >= 3:
+    warnings.append(f"⚠️ 梯度消失风险：{n_vanishing} 层使用 Sigmoid/Tanh，深层网络可能无法有效训练。建议中间层改用 ReLU/GELU/LeakyReLU。")
+
+# Check for linear degeneration (all layers have no activation)
+has_nonlinear = any(l["activation"] != "无激活" for l in st.session_state.diy_layers)
+if not has_nonlinear:
+    warnings.append(f"⚠️ 线性退化：所有隐藏层均无激活函数，整个网络等价于线性回归/逻辑回归，无法学习非线性模式。")
+
 for w in warnings: st.warning(w)
 if not warnings: st.success("✅ 网络规模与数据量匹配良好。")
 
@@ -168,43 +210,45 @@ train_col, clear_col = st.columns(2)
 
 with train_col:
     if st.button("开始训练 / 重新训练", type="primary", use_container_width=True):
-        if "session_id" not in st.session_state:
-            st.error("⚠️ 请先在「数据加载」页面重新上传数据以初始化后端会话。")
-        else:
-            if task_type == "分类 (Classification)":
-                class_counts = numeric_df[target_col].value_counts()
-                if class_counts.min() < 2:
-                    st.error("❌ 每个类别至少需要 2 个样本！")
-                    st.stop()
+        if task_type == "分类 (Classification)":
+            class_counts = df_clean[target_col].value_counts()
+            if class_counts.min() < 2:
+                st.error("❌ 每个类别至少需要 2 个样本！")
+                st.stop()
 
-            with st.spinner("训练中（后端 Flask 计算）..."):
-                device_str = "cuda" if "CUDA" in str(device) else "cpu"
-                task_str = "classification" if "分类" in task_type else "regression"
-                result = train_diy_mlp(
-                    st.session_state.session_id,
-                    target_col, feature_cols,
-                    st.session_state.diy_layers,
-                    task_str, n_classes or 0,
-                    learning_rate, optimizer_name,
-                    epochs, batch_size, val_split, patience, device_str
-                )
-                if result and "train_losses" in result:
-                    st.session_state.diy_result = result
-                    st.session_state.diy_features = feature_cols
-                    st.session_state.diy_target = target_col
-                    st.session_state.diy_task = task_str
-                    if task_str == "classification":
-                        st.session_state.diy_n_classes = result["n_classes"]
-                        st.session_state.diy_reverse_label_map = result["reverse_label_map"]
+        train_df = df_clean if "分类" in task_type else numeric_df
+        with st.spinner("训练中（后端 Flask 计算）..."):
+            sid = ensure_session(train_df)
+            if not sid:
+                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.stop()
+            device_str = "cuda" if "CUDA" in str(device) else "cpu"
+            task_str = "classification" if "分类" in task_type else "regression"
+            result = train_diy_mlp(
+                sid,
+                target_col, feature_cols,
+                st.session_state.diy_layers,
+                task_str, n_classes or 0,
+                learning_rate, optimizer_name,
+                epochs, batch_size, val_split, patience, device_str
+            )
+            if result and "train_losses" in result:
+                st.session_state.diy_result = result
+                st.session_state.diy_features = feature_cols
+                st.session_state.diy_target = target_col
+                st.session_state.diy_task = task_str
+                if task_str == "classification":
+                    st.session_state.diy_n_classes = result["n_classes"]
+                    st.session_state.diy_reverse_label_map = result["reverse_label_map"]
 
-                    if task_str == "regression":
-                        st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
-                    else:
-                        st.success(f"训练完成！准确率 = {result['acc']:.4f}")
-
-                    plot_loss_curve(result["train_losses"], result["val_losses"])
+                if task_str == "regression":
+                    st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
                 else:
-                    st.error(f"训练失败：{result}")
+                    st.success(f"训练完成！准确率 = {result['acc']:.4f}")
+
+                plot_loss_curve(result["train_losses"], result["val_losses"])
+            else:
+                st.error(f"训练失败：{result}")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):

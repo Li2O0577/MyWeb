@@ -98,17 +98,13 @@ def build_data_summary(df):
     return "\n".join(lines)
 
 
-def to_native(val):
-    """Convert numpy scalar to native Python type."""
-    if isinstance(val, (np.integer,)):
-        return int(val)
-    if isinstance(val, (np.floating,)):
-        return float(val)
-    if isinstance(val, (np.bool_,)):
-        return bool(val)
-    return val
-
-
 def serialize_preview(df, rows=100):
     """Return JSON-safe preview of DataFrame."""
-    return df.head(rows).to_dict(orient="records")
+    preview = df.head(rows).copy()
+    for col in preview.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+        preview[col] = preview[col].astype(str)
+    # Convert any remaining non-serializable types
+    for col in preview.columns:
+        if preview[col].dtype == 'object':
+            preview[col] = preview[col].apply(lambda x: str(x) if not isinstance(x, (str, int, float, bool, type(None), list, dict)) else x)
+    return preview.to_dict(orient="records")

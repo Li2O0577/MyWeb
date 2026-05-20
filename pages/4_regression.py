@@ -4,13 +4,14 @@ import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
 from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array
-from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression
+from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel
 
 st.set_page_config(page_title="回归预测", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/4_regression.py")
 st.title("🧠 回归预测")
 
+backend_status_badge()
 device = render_device_selector()
 
 with st.expander("📢 功能介绍", expanded=True):
@@ -32,6 +33,20 @@ numeric_df = df.select_dtypes(include=[np.number]).dropna()
 if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
     st.error("❌ 数据无效！需要至少2列数值数据 + 10行数据")
     st.stop()
+
+render_backend_sync_panel(numeric_df)
+
+# Auto-detect saved model
+if "reg_result" not in st.session_state:
+    status = regression_status()
+    if status and status.get("has_model"):
+        st.session_state.reg_result = {
+            "r2": status.get("r2", 0), "mae": status.get("mae", 0), "rmse": status.get("rmse", 0),
+            "train_losses": [], "val_losses": [], "restored": True
+        }
+        st.session_state.reg_features = status.get("features", [])
+        st.session_state.reg_target = status.get("target", "")
+        st.success(f"✅ 已自动加载上次保存的模型（目标列：{st.session_state.reg_target}，R²={status.get('r2', 0):.4f}）")
 
 st.subheader("📊 数据自动分析与模型配置")
 col1, col2 = st.columns(2)
@@ -69,26 +84,27 @@ train_col, clear_col = st.columns(2)
 
 with train_col:
     if st.button("开始训练 / 重新训练模型", type="primary", use_container_width=True):
-        if "session_id" not in st.session_state:
-            st.error("⚠️ 请先在「数据加载」页面重新上传数据以初始化后端会话。")
-        else:
-            with st.spinner("训练中（后端 Flask 计算中）..."):
-                device_str = "cuda" if "CUDA" in str(device) else "cpu"
-                result = train_regression(
-                    st.session_state.session_id,
-                    str(target_col),
-                    [str(c) for c in feature_cols],
-                    learning_rate, epochs, batch_size, device_str
-                )
-                if result and "r2" in result:
-                    st.session_state.reg_result = result
-                    st.session_state.reg_features = feature_cols
-                    st.session_state.reg_target = target_col
+        with st.spinner("训练中（后端 Flask 计算中）..."):
+            sid = ensure_session(numeric_df)
+            if not sid:
+                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.stop()
+            device_str = "cuda" if "CUDA" in str(device) else "cpu"
+            result = train_regression(
+                sid,
+                str(target_col),
+                [str(c) for c in feature_cols],
+                learning_rate, epochs, batch_size, device_str
+            )
+            if result and "r2" in result:
+                st.session_state.reg_result = result
+                st.session_state.reg_features = feature_cols
+                st.session_state.reg_target = target_col
 
-                    st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
-                    plot_loss_curve(result["train_losses"], result["val_losses"], y_label="损失值 (MSE)")
-                else:
-                    st.error(f"训练失败：{result}")
+                st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
+                plot_loss_curve(result["train_losses"], result["val_losses"], y_label="损失值 (MSE)")
+            else:
+                st.error(f"训练失败：{result}")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):

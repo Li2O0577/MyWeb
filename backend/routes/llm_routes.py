@@ -1,6 +1,7 @@
 """LLM chat API route with SSE streaming."""
-from flask import Blueprint, request, Response, jsonify
+from flask import Blueprint, request, Response
 import json
+from routes._responses import error_event, missing_field
 from services.llm_service import stream_chat
 
 llm_bp = Blueprint("llm", __name__)
@@ -11,7 +12,7 @@ def chat():
     data = request.json or {}
     for k in ("api_base", "api_key", "model", "messages"):
         if k not in data:
-            return jsonify({"error": f"Missing required field: {k}"}), 400
+            return missing_field(k)
     api_base = data["api_base"]
     api_key = data["api_key"]
     model = data["model"]
@@ -21,7 +22,7 @@ def chat():
         full_text = ""
         for chunk, err in stream_chat(api_base, api_key, model, messages):
             if err:
-                yield f"data: {json.dumps({'error': err})}\n\n"
+                yield f"data: {json.dumps(error_event('LLM_STREAM_FAILED', err, err))}\n\n"
                 return
             if chunk:
                 full_text += chunk

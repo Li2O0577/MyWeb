@@ -53,6 +53,10 @@ def train(df, target_col, feature_cols, layers_config,
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
     is_cls = (task_type == "classification")
 
+    cols = feature_cols + [target_col]
+    df = df[cols].dropna()
+    if len(df) < 10:
+        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
     X = df[feature_cols].values
     if is_cls:
         y_raw = df[target_col].values
@@ -67,13 +71,24 @@ def train(df, target_col, feature_cols, layers_config,
         label_map = None
         reverse_label_map = None
 
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=stratify_arg
-    )
-    stratify_temp = y_temp if is_cls else None
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_split, random_state=42, stratify=stratify_temp
-    )
+    try:
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=stratify_arg
+        )
+        stratify_temp = y_temp if is_cls else None
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=val_split, random_state=42, stratify=stratify_temp
+        )
+    except ValueError as e:
+        if stratify_arg is not None and ("stratify" in str(e).lower() or "class" in str(e).lower()):
+            X_temp, X_test, y_temp, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_temp, y_temp, test_size=val_split, random_state=42
+            )
+        else:
+            raise
 
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)

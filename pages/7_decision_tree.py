@@ -5,12 +5,14 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree
+from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree, ensure_session, decision_tree_status, backend_status_badge, render_backend_sync_panel
 
 st.set_page_config(page_title="决策树", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/7_decision_tree.py")
 st.title("🌳 决策树模型")
+
+backend_status_badge()
 
 with st.expander("📢 功能介绍", expanded=True):
     st.markdown("""
@@ -34,6 +36,8 @@ if dropped > 0:
 if len(df_clean) < 10 or df_clean.shape[1] < 2:
     st.error("❌ 数据无效！需要至少10行有效数据")
     st.stop()
+
+render_backend_sync_panel(df_clean)
 
 numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
 categorical_cols = df_clean.select_dtypes(exclude=[np.number]).columns.tolist()
@@ -80,57 +84,66 @@ else:
 
 is_cls = (st.session_state.dt_task_type == "classification")
 
+# Auto-detect saved model
+if "dt_result" not in st.session_state:
+    status = decision_tree_status()
+    if status and status.get("has_model"):
+        st.session_state.dt_result = {}
+        st.session_state.dt_features = status.get("features", [])
+        st.session_state.dt_target = status.get("target", "")
+        st.session_state.dt_task_saved = status.get("task_type", "classification")
+        st.success(f"✅ 已自动加载上次保存的决策树模型（目标列：{st.session_state.dt_target}）")
+
 st.subheader("🚀 模型训练")
 train_col, clear_col = st.columns(2)
 
 with train_col:
     if st.button("开始训练" if "dt_result" not in st.session_state else "重新训练", type="primary", use_container_width=True):
-        if "session_id" not in st.session_state:
-            st.error("⚠️ 请先在「数据加载」页面重新上传数据以初始化后端会话。")
-        else:
-            with st.spinner("训练中（后端 Flask 计算）..."):
-                task_str = "classification" if is_cls else "regression"
-                result = train_decision_tree(
-                    st.session_state.session_id,
-                    str(target_col),
-                    [str(c) for c in feature_cols],
-                    task_str, criterion, max_depth
-                )
-                if result:
-                    st.session_state.dt_result = result
-                    st.session_state.dt_features = feature_cols
-                    st.session_state.dt_target = target_col
-                    st.session_state.dt_task_saved = task_str
+        with st.spinner("训练中（后端 Flask 计算）..."):
+            sid = ensure_session(df_clean)
+            if not sid:
+                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.stop()
+            task_str = "classification" if is_cls else "regression"
+            result = train_decision_tree(
+                sid,
+                str(target_col),
+                [str(c) for c in feature_cols],
+                task_str, criterion, max_depth
+            )
+            if result:
+                st.session_state.dt_result = result
+                st.session_state.dt_features = feature_cols
+                st.session_state.dt_target = target_col
+                st.session_state.dt_task_saved = task_str
 
-                    if is_cls:
-                        st.success(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f}")
-                    else:
-                        st.success(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
-
-                    # Metrics display
-                    if is_cls and "cm" in result:
-                        cm = result["cm"]
-                        label_names = result["label_names"]
-                        col_cm, col_report = st.columns([1, 1])
-                        with col_cm:
-                            st.caption("混淆矩阵")
-                            fig_cm = go.Figure(data=go.Heatmap(z=cm, x=label_names, y=label_names, text=cm, texttemplate="%{text}", textfont=dict(size=14), colorscale="Blues", showscale=False))
-                            fig_cm.update_layout(xaxis_title="预测值", yaxis_title="实际值", height=300, margin=dict(l=0, r=0, t=0, b=0))
-                            st.plotly_chart(fig_cm, use_container_width=True)
-                    if not is_cls:
-                        st.metric("R² Score", f"{result['r2']:.4f}")
-                        st.metric("MAE", f"{result['mae']:.4f}")
-                        st.metric("RMSE", f"{result['rmse']:.4f}")
-
-                    # Tree rules
-                    if "tree_rules" in result:
-                        st.markdown("### 🌿 决策树层级规则")
-                        st.code(result["tree_rules"], language="text")
-                    if "tree_nodes" in result:
-                        st.markdown("### 📊 每层节点详细信息")
-                        st.dataframe(pd.DataFrame(result["tree_nodes"]), use_container_width=True)
+                if is_cls:
+                    st.success(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f}")
                 else:
-                    st.error(f"训练失败：{result}")
+                    st.success(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
+
+                if is_cls and "cm" in result:
+                    cm = result["cm"]
+                    label_names = result["label_names"]
+                    col_cm, col_report = st.columns([1, 1])
+                    with col_cm:
+                        st.caption("混淆矩阵")
+                        fig_cm = go.Figure(data=go.Heatmap(z=cm, x=label_names, y=label_names, text=cm, texttemplate="%{text}", textfont=dict(size=14), colorscale="Blues", showscale=False))
+                        fig_cm.update_layout(xaxis_title="预测值", yaxis_title="实际值", height=300, margin=dict(l=0, r=0, t=0, b=0))
+                        st.plotly_chart(fig_cm, use_container_width=True)
+                if not is_cls:
+                    st.metric("R² Score", f"{result['r2']:.4f}")
+                    st.metric("MAE", f"{result['mae']:.4f}")
+                    st.metric("RMSE", f"{result['rmse']:.4f}")
+
+                if "tree_rules" in result:
+                    st.markdown("### 🌿 决策树层级规则")
+                    st.code(result["tree_rules"], language="text")
+                if "tree_nodes" in result:
+                    st.markdown("### 📊 每层节点详细信息")
+                    st.dataframe(pd.DataFrame(result["tree_nodes"]), use_container_width=True)
+            else:
+                st.error(f"训练失败：{result}")
 
 with clear_col:
     if st.button("清除已保存决策树模型", use_container_width=True):
