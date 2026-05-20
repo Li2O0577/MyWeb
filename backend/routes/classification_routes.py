@@ -1,8 +1,9 @@
 """Classification training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_columns_like
+from routes._helpers import coerce_column_like, coerce_columns_like
 from routes._responses import missing_field, session_expired, service_error
 from services.classification_service import train, predict_one, predict_batch
+from services.training_validation import validate_classification_training
 from session_store import get_session
 
 cls_bp = Blueprint("classification", __name__)
@@ -25,8 +26,12 @@ def train_model():
     if df is None:
         return session_expired()
 
-    target_col = data["target_col"]
+    target_col = coerce_column_like(df, data["target_col"])
     feature_cols = coerce_columns_like(df, data["feature_cols"])
+    if err := validate_classification_training(
+        df, target_col, feature_cols, batch_size=data["batch_size"]
+    ):
+        return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
     n_samples = len(df)
     n_features = len(feature_cols)

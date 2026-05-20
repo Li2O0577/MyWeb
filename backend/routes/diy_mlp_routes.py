@@ -1,8 +1,9 @@
 """DIY MLP training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_columns_like
+from routes._helpers import coerce_column_like, coerce_columns_like
 from routes._responses import missing_field, session_expired, service_error
 from services.diy_mlp_service import train, predict_one, predict_batch
+from services.training_validation import validate_mlp_training
 from session_store import get_session
 
 diy_bp = Blueprint("diy_mlp", __name__)
@@ -25,8 +26,16 @@ def train_model():
     if df is None:
         return session_expired()
 
-    target_col = data["target_col"]
+    target_col = coerce_column_like(df, data["target_col"])
     feature_cols = coerce_columns_like(df, data["feature_cols"])
+    if err := validate_mlp_training(
+        df, target_col, feature_cols,
+        task_type=data["task_type"],
+        batch_size=data["batch_size"],
+        val_split=data["val_split"],
+        n_classes=data["n_classes"],
+    ):
+        return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
     result = train(
         df, target_col, feature_cols, data["layers"],

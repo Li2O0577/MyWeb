@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from routes._helpers import coerce_columns_like
 from routes._responses import missing_field, missing_fields, session_expired, service_error
 from services.clustering_service import train, elbow, predict_one
+from services.training_validation import validate_feature_training
 from session_store import get_session
 
 cluster_bp = Blueprint("clustering", __name__)
@@ -26,6 +27,8 @@ def train_model():
         return session_expired()
 
     feature_cols = coerce_columns_like(df, data["feature_cols"])
+    if err := validate_feature_training(df, feature_cols):
+        return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
     result, err = train(df, feature_cols, data["algorithm"], data["params"])
     if err:
@@ -43,6 +46,8 @@ def elbow_method():
         return session_expired()
 
     feature_cols = coerce_columns_like(df, data["feature_cols"])
+    if err := validate_feature_training(df, feature_cols):
+        return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
     result = elbow(df, feature_cols, data["max_k"])
     return jsonify(result)

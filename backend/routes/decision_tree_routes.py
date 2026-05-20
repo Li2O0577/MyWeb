@@ -1,8 +1,12 @@
 """Decision tree training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_columns_like
+from routes._helpers import coerce_column_like, coerce_columns_like
 from routes._responses import missing_field, session_expired, service_error
 from services.decision_tree_service import train, predict_one
+from services.training_validation import (
+    validate_classification_training,
+    validate_regression_training,
+)
 from session_store import get_session
 
 dt_bp = Blueprint("decision_tree", __name__)
@@ -25,11 +29,22 @@ def train_model():
     if df is None:
         return session_expired()
 
-    target_col = data["target_col"]
+    target_col = coerce_column_like(df, data["target_col"])
     feature_cols = coerce_columns_like(df, data["feature_cols"])
+    task_type = data["task_type"]
+    if task_type == "classification":
+        err = validate_classification_training(
+            df, target_col, feature_cols, require_numeric_features=False, min_clean_rows=5
+        )
+    else:
+        err = validate_regression_training(
+            df, target_col, feature_cols, require_numeric_features=False, min_clean_rows=5
+        )
+    if err:
+        return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
     result = train(df, target_col, feature_cols,
-                   data["task_type"], data["criterion"], data["max_depth"])
+                   task_type, data["criterion"], data["max_depth"])
     if isinstance(result, dict) and "error" in result:
         return service_error("TRAINING_FAILED", result["error"], 400)
     return jsonify(result)
