@@ -12,11 +12,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, confusion_matrix
 from torch.utils.data import TensorDataset, DataLoader
 
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(MODEL_DIR, "cls_best_model.pth")
-SCALER_PATH = os.path.join(MODEL_DIR, "cls_scaler.pkl")
-CONFIG_PATH = os.path.join(MODEL_DIR, "cls_config.json")
+from models.registry import (
+    get_model_paths, create_version_dir, register_version, generate_version_id,
+)
 
 
 class ClassificationNet(nn.Module):
@@ -34,8 +32,9 @@ class ClassificationNet(nn.Module):
 
 
 def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
-          learning_rate, epochs, batch_size, device_str):
-    """Train classification MLP. Returns metrics + losses + cm."""
+          learning_rate, epochs, batch_size, device_str,
+          dataset_name="", session_id=""):
+    """Train classification MLP. Returns metrics + losses + cm + version_id."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
 
     cols = feature_cols + [target_col]
@@ -59,7 +58,6 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
             X_temp, y_temp, test_size=0.2, random_state=42, stratify=y_temp
         )
     except ValueError as e:
-        # Fallback: split without stratification (some classes may have too few samples)
         if "stratify" in str(e).lower() or "class" in str(e).lower():
             X_temp, X_test, y_temp, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42
@@ -148,39 +146,60 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     unique_test_labels = sorted(set(int(y) for y in y_test) | set(int(y) for y in y_pred))
     label_names = [str(reverse_label_map.get(l, l)) for l in unique_test_labels]
 
-    # Persist
-    torch.save(model.state_dict(), MODEL_PATH)
-    with open(SCALER_PATH, 'wb') as f:
+    # Persist as version
+    version_id = generate_version_id()
+    vdir = create_version_dir("classification", version_id)
+
+    model_path = os.path.join(vdir, "model.pth")
+    scaler_path = os.path.join(vdir, "scaler.pkl")
+    config_path = os.path.join(vdir, "config.json")
+
+    torch.save(model.state_dict(), model_path)
+    with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        json.dump({
-            "features": [str(c) for c in feature_cols],
-            "target": str(target_col),
-            "n_classes": n_classes,
-            "hidden1": hidden1,
-            "hidden2": hidden2,
-            "dropout_rate": dropout_rate,
-            "label_map": {str(k): v for k, v in label_map.items()},
-            "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()}
-        }, f, ensure_ascii=False)
+
+    config_dict = {
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
+        "n_classes": n_classes,
+        "hidden1": hidden1,
+        "hidden2": hidden2,
+        "dropout_rate": dropout_rate,
+        "label_map": {str(k): v for k, v in label_map.items()},
+        "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()}
+    }
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config_dict, f, ensure_ascii=False)
+
+    register_version("classification", version_id, {
+        "dataset_name": dataset_name,
+        "session_id": session_id,
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
+        "metrics": {"acc": acc},
+        "params": {"hidden1": hidden1, "hidden2": hidden2, "dropout_rate": dropout_rate,
+                   "learning_rate": learning_rate, "epochs": epochs, "batch_size": batch_size,
+                   "n_classes": n_classes},
+    }, {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"})
 
     return {
         "acc": acc, "cm": cm, "label_names": label_names,
         "n_classes": n_classes,
         "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()},
-        "train_losses": train_losses, "val_losses": val_losses
+        "train_losses": train_losses, "val_losses": val_losses,
+        "version_id": version_id
     }
 
 
-def predict_one(feature_values, device_str="cpu"):
-    """Single prediction. Returns {pred_class, prob, pred_idx}."""
-    device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    if not os.path.exists(MODEL_PATH):
-        return None, "No saved model found."
+def _load_model(device, version_id=None):
+    """Load model, scaler, config for the active (or specified) version."""
+    paths, meta = get_model_paths("classification", version_id)
+    if not paths:
+        return None, None, None, "No saved model found."
 
-    with open(CONFIG_PATH, 'r') as f:
+    with open(paths["config"], 'r') as f:
         config = json.load(f)
-    with open(SCALER_PATH, 'rb') as f:
+    with open(paths["scaler"], 'rb') as f:
         scaler = pickle.load(f)
 
     n_classes = config["n_classes"]
@@ -189,9 +208,20 @@ def predict_one(feature_values, device_str="cpu"):
     h2 = config.get("hidden2", max(4, n_features // 2))
     dr = config.get("dropout_rate", 0.2)
     model = ClassificationNet(n_features, h1, h2, dr, n_classes).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.load_state_dict(torch.load(paths["model"], map_location=device, weights_only=True))
     model.eval()
 
+    return model, scaler, config, None
+
+
+def predict_one(feature_values, device_str="cpu", version_id=None):
+    """Single prediction. Returns {pred_class, prob, pred_idx}."""
+    device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
+    model, scaler, config, err = _load_model(device, version_id)
+    if err:
+        return None, err
+
+    n_classes = config["n_classes"]
     input_arr = np.array([feature_values])
     input_scaled = scaler.transform(input_arr)
     input_tensor = torch.tensor(input_scaled, dtype=torch.float32).to(device)
@@ -209,26 +239,14 @@ def predict_one(feature_values, device_str="cpu"):
     return {"pred_idx": pred_idx, "prob": prob}, None
 
 
-def predict_batch(rows, device_str="cpu"):
+def predict_batch(rows, device_str="cpu", version_id=None):
     """Batch prediction. Returns {pred_indices, confidences}."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    if not os.path.exists(MODEL_PATH):
-        return None, "No saved model found."
-
-    with open(CONFIG_PATH, 'r') as f:
-        config = json.load(f)
-    with open(SCALER_PATH, 'rb') as f:
-        scaler = pickle.load(f)
+    model, scaler, config, err = _load_model(device, version_id)
+    if err:
+        return None, err
 
     n_classes = config["n_classes"]
-    n_features = len(config["features"])
-    h1 = config.get("hidden1", max(8, n_features))
-    h2 = config.get("hidden2", max(4, n_features // 2))
-    dr = config.get("dropout_rate", 0.2)
-    model = ClassificationNet(n_features, h1, h2, dr, n_classes).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    model.eval()
-
     batch_arr = np.array(rows)
     batch_scaled = scaler.transform(batch_arr)
     batch_tensor = torch.tensor(batch_scaled, dtype=torch.float32).to(device)

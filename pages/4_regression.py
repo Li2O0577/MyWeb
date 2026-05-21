@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array
-from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel, list_regression_versions, activate_regression_version, delete_regression_version
 
 st.set_page_config(page_title="回归预测", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
@@ -36,17 +36,25 @@ if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
 
 render_backend_sync_panel(numeric_df)
 
+# Version selector
+active_vid = render_version_selector("回归", list_regression_versions, activate_regression_version, delete_regression_version)
+
 # Auto-detect saved model
 if "reg_result" not in st.session_state:
     status = regression_status()
     if status and status.get("has_model"):
         st.session_state.reg_result = {
-            "r2": status.get("r2", 0), "mae": status.get("mae", 0), "rmse": status.get("rmse", 0),
+            "r2": status.get("metrics", {}).get("r2", 0),
+            "mae": status.get("metrics", {}).get("mae", 0),
+            "rmse": status.get("metrics", {}).get("rmse", 0),
             "train_losses": [], "val_losses": [], "restored": True
         }
         st.session_state.reg_features = status.get("features", [])
         st.session_state.reg_target = status.get("target", "")
-        st.success(f"✅ 已自动加载上次保存的模型（目标列：{st.session_state.reg_target}，R²={status.get('r2', 0):.4f}）")
+        st.session_state.reg_version_id = status.get("version_id", "")
+        ds = status.get("dataset_name", "")
+        created = status.get("created_at", "")[:16].replace("T", " ")
+        st.success(f"已加载模型版本（{ds} | {created} | 目标列：{st.session_state.reg_target}）")
 
 st.subheader("📊 数据自动分析与模型配置")
 col1, col2 = st.columns(2)
@@ -100,8 +108,9 @@ with train_col:
                 st.session_state.reg_result = result
                 st.session_state.reg_features = feature_cols
                 st.session_state.reg_target = target_col
+                st.session_state.reg_version_id = result.get("version_id", "")
 
-                st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
+                st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
                 plot_loss_curve(result["train_losses"], result["val_losses"], y_label="损失值 (MSE)")
             else:
                 st.error(f"训练失败：{result}")
@@ -109,7 +118,7 @@ with train_col:
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
         clear_regression()
-        for k in ["reg_result", "reg_features", "reg_target"]:
+        for k in ["reg_result", "reg_features", "reg_target", "reg_version_id"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.warning("已清除所有保存的模型！")

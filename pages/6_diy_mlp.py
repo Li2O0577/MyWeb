@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array
-from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel, list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version
 
 st.set_page_config(page_title="自定义 MLP", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
@@ -76,6 +76,9 @@ else:
 
 check_constant_features(numeric_df, feature_cols)
 
+# Version selector
+active_vid = render_version_selector("DIY MLP", list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version)
+
 # Auto-detect saved model
 if "diy_result" not in st.session_state:
     status = diy_mlp_status()
@@ -83,15 +86,19 @@ if "diy_result" not in st.session_state:
         st.session_state.diy_result = {"train_losses": [], "val_losses": []}
         st.session_state.diy_features = status.get("features", [])
         st.session_state.diy_target = status.get("target", "")
-        st.session_state.diy_task = status.get("task", "regression")
-        if st.session_state.diy_task == "classification":
-            st.session_state.diy_n_classes = status.get("n_classes", 2)
-            st.session_state.diy_reverse_label_map = status.get("reverse_label_map", {})
+        saved_task = status.get("params", {}).get("task", "regression")
+        st.session_state.diy_task = saved_task
+        if saved_task == "classification":
+            st.session_state.diy_n_classes = status.get("params", {}).get("n_classes", 2)
+            st.session_state.diy_reverse_label_map = {}
+        st.session_state.diy_version_id = status.get("version_id", "")
         # Restore layers from saved config
-        saved_layers = status.get("layers", [])
+        saved_layers = status.get("params", {}).get("layers", [])
         if saved_layers and "diy_layers" not in st.session_state:
             st.session_state.diy_layers = saved_layers
-        st.success(f"✅ 已自动加载上次保存的模型（目标列：{st.session_state.diy_target}）")
+        ds = status.get("dataset_name", "")
+        created = status.get("created_at", "")[:16].replace("T", " ")
+        st.success(f"已加载 DIY MLP 模型版本（{ds} | {created} | 目标列：{st.session_state.diy_target}）")
 
 # ── Layer builder UI ──
 st.subheader("🧱 网络结构设计")
@@ -237,14 +244,15 @@ with train_col:
                 st.session_state.diy_features = feature_cols
                 st.session_state.diy_target = target_col
                 st.session_state.diy_task = task_str
+                st.session_state.diy_version_id = result.get("version_id", "")
                 if task_str == "classification":
                     st.session_state.diy_n_classes = result["n_classes"]
                     st.session_state.diy_reverse_label_map = result["reverse_label_map"]
 
                 if task_str == "regression":
-                    st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
+                    st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
                 else:
-                    st.success(f"训练完成！准确率 = {result['acc']:.4f}")
+                    st.success(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
 
                 plot_loss_curve(result["train_losses"], result["val_losses"])
             else:
@@ -253,7 +261,7 @@ with train_col:
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
         clear_diy_mlp()
-        for k in ["diy_result", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map"]:
+        for k in ["diy_result", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map", "diy_version_id"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除所有保存的模型！")
 

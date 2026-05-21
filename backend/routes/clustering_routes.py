@@ -4,7 +4,10 @@ from routes._helpers import coerce_columns_like
 from routes._responses import missing_field, missing_fields, session_expired, service_error
 from services.clustering_service import train, elbow, predict_one
 from services.training_validation import validate_feature_training
-from session_store import get_session
+from session_store import get_session, get_session_meta
+from models.registry import (
+    list_versions, get_version, get_active_version, activate_version, delete_version
+)
 
 cluster_bp = Blueprint("clustering", __name__)
 
@@ -30,7 +33,11 @@ def train_model():
     if err := validate_feature_training(df, feature_cols):
         return service_error("INPUT_VALIDATION_FAILED", err["error"], 400)
 
-    result, err = train(df, feature_cols, data["algorithm"], data["params"])
+    meta = get_session_meta(sid)
+    dataset_name = meta.get("source_name", "") if meta else ""
+
+    result, err = train(df, feature_cols, data["algorithm"], data["params"],
+                        dataset_name=dataset_name, session_id=sid)
     if err:
         return service_error("TRAINING_FAILED", err, 400)
     return jsonify(result)
@@ -58,7 +65,7 @@ def predict():
     data = request.json or {}
     if "features" not in data:
         return missing_field("features")
-    result, err = predict_one(data["features"])
+    result, err = predict_one(data["features"], version_id=data.get("version_id"))
     if err:
         return service_error("PREDICTION_FAILED", err, 400)
     return jsonify(result)
@@ -66,24 +73,58 @@ def predict():
 
 @cluster_bp.route("/status", methods=["GET"])
 def model_status():
-    import os, json
-    base = os.path.dirname(os.path.dirname(__file__))
-    config_path = os.path.join(base, "models", "cluster_config.json")
-    model_path = os.path.join(base, "models", "cluster_model.pkl")
-    if not os.path.exists(config_path) or not os.path.exists(model_path):
+    vid = get_active_version("clustering")
+    if not vid:
         return jsonify({"has_model": False})
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = json.load(f)
-    return jsonify({"has_model": True, "features": config.get("features", []),
-                    "algorithm": config.get("algorithm"), "n_clusters": config.get("n_clusters"),
-                    "silhouette": config.get("silhouette")})
+    meta = get_version("clustering", vid)
+    if not meta:
+        return jsonify({"has_model": False})
+    return jsonify({"has_model": True, "version_id": vid,
+                    "features": meta.get("features", []),
+                    "target": meta.get("target", ""),
+                    "metrics": meta.get("metrics", {}),
+                    "params": meta.get("params", {}),
+                    "created_at": meta.get("created_at", ""),
+                    "dataset_name": meta.get("dataset_name", "")})
+
+
+@cluster_bp.route("/versions", methods=["GET"])
+def list_model_versions():
+    versions = list_versions("clustering")
+    active = get_active_version("clustering")
+    return jsonify({"versions": versions, "active": active})
+
+
+@cluster_bp.route("/version/<version_id>", methods=["GET"])
+def get_version_detail(version_id):
+    meta = get_version("clustering", version_id)
+    if not meta:
+        return service_error("VERSION_NOT_FOUND", "Version not found", 404)
+    return jsonify({"version_id": version_id, **meta})
+
+
+@cluster_bp.route("/activate", methods=["POST"])
+def activate():
+    data = request.json or {}
+    if "version_id" not in data:
+        return missing_field("version_id")
+    ok = activate_version("clustering", data["version_id"])
+    if not ok:
+        return service_error("VERSION_NOT_FOUND", "Version not found", 404)
+    return jsonify({"status": "activated", "version_id": data["version_id"]})
+
+
+@cluster_bp.route("/version/<version_id>", methods=["DELETE"])
+def delete_model_version(version_id):
+    ok = delete_version("clustering", version_id)
+    if not ok:
+        return service_error("VERSION_NOT_FOUND", "Version not found", 404)
+    return jsonify({"status": "deleted"})
 
 
 @cluster_bp.route("/clear", methods=["POST"])
 def clear():
-    import os
-    for f in ["models/cluster_model.pkl", "models/cluster_scaler.pkl", "models/cluster_config.json"]:
-        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), f)
-        if os.path.exists(path):
-            os.remove(path)
+    vid = get_active_version("clustering")
+    if vid:
+        delete_version("clustering", vid)
     return jsonify({"status": "cleared"})

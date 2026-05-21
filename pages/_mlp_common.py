@@ -64,3 +64,72 @@ def plot_loss_curve(train_losses, val_losses, y_label="损失值", title="训练
         template="plotly_white", height=350, margin=dict(l=0, r=0, t=40, b=0)
     )
     st.plotly_chart(fig, use_container_width=True)
+
+
+# ── Model version selector ──
+
+def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
+    """Render a model version selector UI.
+
+    Returns the active version_id (str or None). Call after training or on page load.
+    Side effects: calls activate_fn when user picks a version; deletes on user request.
+    """
+    data = list_fn()
+    if not data:
+        st.caption("暂无已保存的模型版本。")
+        return None
+
+    versions = data.get("versions", [])
+    active = data.get("active")
+
+    if not versions:
+        st.caption("暂无已保存的模型版本。")
+        return None
+
+    with st.expander(f"📦 {model_label} 模型版本管理（共 {len(versions)} 个版本）", expanded=False):
+        # Build version options
+        options = []
+        vid_to_idx = {}
+        for i, v in enumerate(versions):
+            vid = v.get("version_id", "")
+            ds = v.get("dataset_name", "未知数据集")
+            created = v.get("created_at", "")[:16].replace("T", " ")
+            metrics = v.get("metrics", {})
+            metric_str = ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                                   for k, v in metrics.items())
+            active_mark = " ★" if vid == active else ""
+            label = f"{ds} | {metric_str} | {created}{active_mark}"
+            options.append(label)
+            vid_to_idx[label] = vid
+
+        col1, col2, col3 = st.columns([5, 1, 1])
+        with col1:
+            default_idx = 0
+            for label, vid in vid_to_idx.items():
+                if vid == active:
+                    default_idx = options.index(label)
+                    break
+            selected_label = st.selectbox(
+                f"选择{model_label}版本",
+                options, index=default_idx,
+                key=f"version_selector_{model_label}",
+                label_visibility="collapsed"
+            )
+            selected_vid = vid_to_idx.get(selected_label)
+
+        with col2:
+            if st.button("✅ 激活", key=f"activate_{model_label}", use_container_width=True):
+                if selected_vid and selected_vid != active:
+                    activate_fn(selected_vid)
+                    st.success(f"已激活版本 {selected_vid[:20]}...")
+                    st.rerun()
+
+        with col3:
+            if selected_vid and len(versions) > 1:
+                if st.button("🗑️ 删除", key=f"delete_{model_label}", use_container_width=True):
+                    delete_fn(selected_vid)
+                    st.warning(f"已删除版本 {selected_vid[:20]}...")
+                    st.rerun()
+
+    return active
+

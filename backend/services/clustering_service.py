@@ -8,15 +8,13 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(MODEL_DIR, "cluster_model.pkl")
-SCALER_PATH = os.path.join(MODEL_DIR, "cluster_scaler.pkl")
-CONFIG_PATH = os.path.join(MODEL_DIR, "cluster_config.json")
+from models.registry import (
+    get_model_paths, create_version_dir, register_version, generate_version_id,
+)
 
 
-def train(df, feature_cols, algorithm, params):
-    """Train clustering model. Returns labels, metrics, and PCA coords for plotting."""
+def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
+    """Train clustering model. Returns labels, metrics, PCA coords, and version_id."""
     df = df[feature_cols].dropna()
     if len(df) < 10:
         return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
@@ -38,7 +36,7 @@ def train(df, feature_cols, algorithm, params):
         if n_found == 0:
             return None, "DBSCAN 将所有点标记为噪声！请增大 eps 或减小 min_samples 后重试。"
 
-    # Silhouette score (requires >= 2 samples AND >= 2 unique labels)
+    # Silhouette score
     sil = None
     valid_mask = cluster_labels != -1
     valid_labels = cluster_labels[valid_mask]
@@ -69,24 +67,41 @@ def train(df, feature_cols, algorithm, params):
     labels = cluster_labels.tolist()
     cluster_counts = {int(l): int((np.array(labels) == l).sum()) for l in sorted(set(labels))}
 
-    # Persist
-    with open(MODEL_PATH, 'wb') as f:
+    # Persist as version
+    version_id = generate_version_id()
+    vdir = create_version_dir("clustering", version_id)
+
+    model_path = os.path.join(vdir, "model.pkl")
+    scaler_path = os.path.join(vdir, "scaler.pkl")
+    config_path = os.path.join(vdir, "config.json")
+
+    with open(model_path, 'wb') as f:
         pickle.dump(model, f)
-    with open(SCALER_PATH, 'wb') as f:
+    with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
+
     config_dict = {
         "features": [str(c) for c in feature_cols],
         "algorithm": algorithm,
         "params": params,
         "n_clusters_found": n_found,
     }
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+    with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config_dict, f, ensure_ascii=False)
+
+    register_version("clustering", version_id, {
+        "dataset_name": dataset_name,
+        "session_id": session_id,
+        "features": [str(c) for c in feature_cols],
+        "target": "",
+        "metrics": {"silhouette": sil, "n_clusters": n_found},
+        "params": {"algorithm": algorithm, "params": params},
+    }, {"model": "model.pkl", "scaler": "scaler.pkl", "config": "config.json"})
 
     return {
         "labels": labels, "cluster_counts": cluster_counts, "n_found": n_found,
         "silhouette": sil, "inertia": inertia, "pca": pca_result,
-        "algorithm": algorithm
+        "algorithm": algorithm, "version_id": version_id
     }, None
 
 
@@ -105,17 +120,20 @@ def elbow(df, feature_cols, max_k):
     return {"ks": ks, "inertias": inertias}
 
 
-def predict_one(feature_values):
+def predict_one(feature_values, version_id=None):
     """Predict cluster for a new data point (K-means only)."""
-    if not os.path.exists(MODEL_PATH):
+    paths, meta = get_model_paths("clustering", version_id)
+    if not paths:
         return None, "No saved model found."
-    with open(CONFIG_PATH, 'r') as f:
+
+    with open(paths["config"], 'r') as f:
         config = json.load(f)
     if config.get("algorithm") != "kmeans":
         return None, "Only K-means supports prediction."
-    with open(MODEL_PATH, 'rb') as f:
+
+    with open(paths["model"], 'rb') as f:
         model = pickle.load(f)
-    with open(SCALER_PATH, 'rb') as f:
+    with open(paths["scaler"], 'rb') as f:
         scaler = pickle.load(f)
 
     input_arr = np.array([feature_values])

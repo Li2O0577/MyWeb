@@ -10,14 +10,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, export_text
 from sklearn.metrics import accuracy_score, confusion_matrix, r2_score, mean_absolute_error, mean_squared_error
 
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(MODEL_DIR, "dt_model.pkl")
-CONFIG_PATH = os.path.join(MODEL_DIR, "dt_config.json")
+from models.registry import (
+    get_model_paths, create_version_dir, register_version, generate_version_id,
+)
 
 
-def train(df, target_col, feature_cols, task_type, criterion, max_depth):
-    """Train decision tree. Returns metrics."""
+def train(df, target_col, feature_cols, task_type, criterion, max_depth,
+          dataset_name="", session_id=""):
+    """Train decision tree. Returns metrics + version_id."""
     is_cls = (task_type == "classification")
     cols = feature_cols + [target_col]
     df = df[cols].dropna()
@@ -64,17 +64,42 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth):
         result["mae"] = float(mean_absolute_error(y_test, y_pred))
         result["rmse"] = float(np.sqrt(mean_squared_error(y_test, y_pred)))
 
-    # Persist
-    with open(MODEL_PATH, 'wb') as f:
+    # Persist as version
+    version_id = generate_version_id()
+    vdir = create_version_dir("decision_tree", version_id)
+
+    model_path = os.path.join(vdir, "model.pkl")
+    config_path = os.path.join(vdir, "config.json")
+
+    with open(model_path, 'wb') as f:
         pickle.dump(pipeline, f)
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        json.dump({
-            "features": feature_cols,
-            "target": target_col,
-            "criterion": criterion,
-            "max_depth": max_depth,
-            "task_type": task_type
-        }, f, ensure_ascii=False)
+
+    config_dict = {
+        "features": feature_cols,
+        "target": target_col,
+        "criterion": criterion,
+        "max_depth": max_depth,
+        "task_type": task_type
+    }
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config_dict, f, ensure_ascii=False)
+
+    metrics = {}
+    if is_cls:
+        metrics["acc"] = result.get("acc")
+    else:
+        metrics["r2"] = result.get("r2")
+        metrics["mae"] = result.get("mae")
+        metrics["rmse"] = result.get("rmse")
+
+    register_version("decision_tree", version_id, {
+        "dataset_name": dataset_name,
+        "session_id": session_id,
+        "features": feature_cols,
+        "target": target_col,
+        "metrics": metrics,
+        "params": {"criterion": criterion, "max_depth": max_depth, "task_type": task_type},
+    }, {"model": "model.pkl", "config": "config.json"})
 
     # Tree rules
     tree = None
@@ -109,15 +134,18 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth):
         result["tree_nodes"] = nodes
         result["criterion_name"] = criterion_name
 
+    result["version_id"] = version_id
     return result
 
 
-def predict_one(input_dict, task_type):
+def predict_one(input_dict, task_type, version_id=None):
     """Single prediction. Returns predicted value/class."""
-    if not os.path.exists(MODEL_PATH):
-        return None, "No saved model found."
     import pandas as pd
-    with open(MODEL_PATH, 'rb') as f:
+    paths, meta = get_model_paths("decision_tree", version_id)
+    if not paths:
+        return None, "No saved model found."
+
+    with open(paths["model"], 'rb') as f:
         pipeline = pickle.load(f)
     input_df = pd.DataFrame(input_dict)
     pred = pipeline.predict(input_df)[0]

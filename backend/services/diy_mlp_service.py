@@ -12,11 +12,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, accuracy_score
 from torch.utils.data import TensorDataset, DataLoader
 
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(MODEL_DIR, "diy_best_model.pth")
-SCALER_PATH = os.path.join(MODEL_DIR, "diy_scaler.pkl")
-CONFIG_PATH = os.path.join(MODEL_DIR, "diy_config.json")
+from models.registry import (
+    get_model_paths, create_version_dir, register_version, generate_version_id,
+)
 
 ACT_FNS = {
     "ReLU": nn.ReLU, "LeakyReLU": lambda: nn.LeakyReLU(0.1), "GELU": nn.GELU,
@@ -48,8 +46,9 @@ class DynamicMLP(nn.Module):
 
 def train(df, target_col, feature_cols, layers_config,
           task_type, n_classes, learning_rate, optimizer_name,
-          epochs, batch_size, val_split, patience, device_str):
-    """Train custom MLP. Returns task-specific metrics + losses."""
+          epochs, batch_size, val_split, patience, device_str,
+          dataset_name="", session_id=""):
+    """Train custom MLP. Returns task-specific metrics + losses + version_id."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
     is_cls = (task_type == "classification")
 
@@ -190,7 +189,14 @@ def train(df, target_col, feature_cols, layers_config,
                 y_pred_np = torch.argmax(y_pred_t, dim=1).cpu().numpy()
             result["acc"] = float(accuracy_score(y_test, y_pred_np))
 
-    # Persist
+    # Persist as version
+    version_id = generate_version_id()
+    vdir = create_version_dir("diy_mlp", version_id)
+
+    model_path = os.path.join(vdir, "model.pth")
+    scaler_path = os.path.join(vdir, "scaler.pkl")
+    config_path = os.path.join(vdir, "config.json")
+
     config_dict = {
         "features": feature_cols,
         "target": target_col,
@@ -202,34 +208,65 @@ def train(df, target_col, feature_cols, layers_config,
         config_dict["label_map"] = {str(k): v for k, v in label_map.items()}
         config_dict["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
 
-    torch.save(model.state_dict(), MODEL_PATH)
-    with open(SCALER_PATH, 'wb') as f:
+    torch.save(model.state_dict(), model_path)
+    with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+    with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config_dict, f, ensure_ascii=False)
+
+    metrics = {}
+    params = {"layers": layers_config, "learning_rate": learning_rate,
+              "optimizer": optimizer_name, "epochs": epochs, "batch_size": batch_size}
+    if is_cls:
+        metrics["acc"] = result.get("acc")
+        params["n_classes"] = n_classes
+    else:
+        metrics["r2"] = result.get("r2")
+        metrics["mae"] = result.get("mae")
+        metrics["rmse"] = result.get("rmse")
+
+    register_version("diy_mlp", version_id, {
+        "dataset_name": dataset_name,
+        "session_id": session_id,
+        "features": feature_cols,
+        "target": target_col,
+        "metrics": metrics,
+        "params": params,
+    }, {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"})
 
     if is_cls:
         result["n_classes"] = n_classes
         result["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
 
+    result["version_id"] = version_id
     return result
 
 
-def predict_one(feature_values, device_str="cpu"):
-    """Single prediction. Returns task-specific result."""
-    device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    if not os.path.exists(MODEL_PATH):
-        return None, "No saved model found."
+def _load_model(device, version_id=None):
+    """Load model, scaler, config for the active (or specified) version."""
+    paths, meta = get_model_paths("diy_mlp", version_id)
+    if not paths:
+        return None, None, None, "No saved model found."
 
-    with open(CONFIG_PATH, 'r') as f:
+    with open(paths["config"], 'r') as f:
         config = json.load(f)
-    with open(SCALER_PATH, 'rb') as f:
+    with open(paths["scaler"], 'rb') as f:
         scaler = pickle.load(f)
 
     output_dim = 1 if config["task"] == "regression" or config.get("n_classes") == 2 else config.get("n_classes", 1)
     model = DynamicMLP(len(config["features"]), config["layers"], output_dim).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.load_state_dict(torch.load(paths["model"], map_location=device, weights_only=True))
     model.eval()
+
+    return model, scaler, config, None
+
+
+def predict_one(feature_values, device_str="cpu", version_id=None):
+    """Single prediction. Returns task-specific result."""
+    device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
+    model, scaler, config, err = _load_model(device, version_id)
+    if err:
+        return None, err
 
     input_arr = np.array([feature_values])
     input_scaled = scaler.transform(input_arr)
@@ -251,21 +288,12 @@ def predict_one(feature_values, device_str="cpu"):
                         "all_probs": probs.tolist()}, None
 
 
-def predict_batch(rows, device_str="cpu"):
+def predict_batch(rows, device_str="cpu", version_id=None):
     """Batch prediction."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    if not os.path.exists(MODEL_PATH):
-        return None, "No saved model found."
-
-    with open(CONFIG_PATH, 'r') as f:
-        config = json.load(f)
-    with open(SCALER_PATH, 'rb') as f:
-        scaler = pickle.load(f)
-
-    output_dim = 1 if config["task"] == "regression" or config.get("n_classes") == 2 else config.get("n_classes", 1)
-    model = DynamicMLP(len(config["features"]), config["layers"], output_dim).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    model.eval()
+    model, scaler, config, err = _load_model(device, version_id)
+    if err:
+        return None, err
 
     batch_arr = np.array(rows)
     batch_scaled = scaler.transform(batch_arr)

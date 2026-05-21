@@ -5,7 +5,8 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree, ensure_session, decision_tree_status, backend_status_badge, render_backend_sync_panel
+from pages._mlp_common import render_version_selector
+from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree, ensure_session, decision_tree_status, backend_status_badge, render_backend_sync_panel, list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version
 
 st.set_page_config(page_title="决策树", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
@@ -84,6 +85,9 @@ else:
 
 is_cls = (st.session_state.dt_task_type == "classification")
 
+# Version selector
+active_vid = render_version_selector("决策树", list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version)
+
 # Auto-detect saved model
 if "dt_result" not in st.session_state:
     status = decision_tree_status()
@@ -91,8 +95,11 @@ if "dt_result" not in st.session_state:
         st.session_state.dt_result = {}
         st.session_state.dt_features = status.get("features", [])
         st.session_state.dt_target = status.get("target", "")
-        st.session_state.dt_task_saved = status.get("task_type", "classification")
-        st.success(f"✅ 已自动加载上次保存的决策树模型（目标列：{st.session_state.dt_target}）")
+        st.session_state.dt_task_saved = status.get("params", {}).get("task_type", "classification")
+        st.session_state.dt_version_id = status.get("version_id", "")
+        ds = status.get("dataset_name", "")
+        created = status.get("created_at", "")[:16].replace("T", " ")
+        st.success(f"已加载决策树模型版本（{ds} | {created} | 目标列：{st.session_state.dt_target}）")
 
 st.subheader("🚀 模型训练")
 train_col, clear_col = st.columns(2)
@@ -116,11 +123,12 @@ with train_col:
                 st.session_state.dt_features = feature_cols
                 st.session_state.dt_target = target_col
                 st.session_state.dt_task_saved = task_str
+                st.session_state.dt_version_id = result.get("version_id", "")
 
                 if is_cls:
-                    st.success(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f}")
+                    st.success(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
                 else:
-                    st.success(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f}")
+                    st.success(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
 
                 if is_cls and "cm" in result:
                     cm = result["cm"]
@@ -148,7 +156,7 @@ with train_col:
 with clear_col:
     if st.button("清除已保存决策树模型", use_container_width=True):
         clear_decision_tree()
-        for k in ["dt_result", "dt_features", "dt_target", "dt_task_saved"]:
+        for k in ["dt_result", "dt_features", "dt_target", "dt_task_saved", "dt_version_id"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除决策树模型！")
 

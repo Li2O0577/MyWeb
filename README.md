@@ -69,27 +69,24 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 ### 2. 启动
 
-推荐双击运行：
-
-```bash
-start.bat
-```
-
-启动脚本会优先使用 `ml0` conda 环境，自动等待 Flask 后端健康检查通过后再启动 Streamlit。
-
-也可以手动启动：
+打开两个终端，均需先激活 Python 环境：
 
 ```bash
 # 终端 1 — 启动 Flask 后端
+conda activate 你的环境          # 或用你自己的环境名
 cd backend
 python app.py
 # → http://localhost:5001
 
 # 终端 2 — 启动 Streamlit 前端
+conda activate 你的环境
 cd ..
+set INDETERMINATE_API_BASE=http://127.0.0.1:5001/api
 streamlit run main.py
 # → http://localhost:8501
 ```
+
+后端端口可通过环境变量 `FLASK_PORT` 修改，默认 `5001`。
 
 可选配置：
 
@@ -128,6 +125,7 @@ MyWeb1/
 ├── backend/                     # Flask 后端
 │   ├── app.py                   # Flask 入口（session 管理、blueprint 注册）
 │   ├── requirements.txt         # 后端依赖
+│   ├── session_store.py          # Session 持久化（内存 + 磁盘），支持重启恢复
 │   ├── routes/                  # API 路由层（参数校验 + 调用 service）
 │   │   ├── data_routes.py       # /api/data/*
 │   │   ├── regression_routes.py # /api/regression/*
@@ -144,7 +142,10 @@ MyWeb1/
 │   │   ├── decision_tree_service.py
 │   │   ├── clustering_service.py
 │   │   └── llm_service.py
-│   └── models/                  # 训练好的模型文件（.gitignore 排除）
+│   ├── models/                    # 模型版本存储 + 注册表
+│   │   ├── registry.py            # 版本注册表管理器
+│   │   └── {type}/{version_id}/   # 各版本目录（.gitignore 排除）
+│   ├── sessions/                  # Flask session 持久化（.gitignore 排除）
 └── .gitignore
 ```
 
@@ -178,6 +179,10 @@ MyWeb1/
 | `/api/decision_tree/*` | POST | 同上模式 |
 | `/api/clustering/*` | POST | 同上模式 + `/elbow` |
 | `/api/llm/chat` | POST | SSE 流式聊天 |
+| `/api/{type}/versions` | GET | 列出该类型所有模型版本 |
+| `/api/{type}/version/<vid>` | GET | 获取版本详情 |
+| `/api/{type}/activate` | POST | 切换激活版本 |
+| `/api/{type}/version/<vid>` | DELETE | 删除版本及其文件 |
 
 ## 功能模块
 

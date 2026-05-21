@@ -63,7 +63,7 @@ def backend_status_badge():
         st.success(f"✅ Flask 后端已连接 | 活跃会话: {sessions}{recent_text} | 已保存模型: {model_str}")
         return True
     else:
-        st.error("❌ Flask 后端未运行！请在终端运行 `start.bat` 启动后端，否则 ML 训练/预测功能不可用。")
+        st.error("❌ Flask 后端未运行！请在新终端中运行 `cd backend && python app.py` 启动后端，否则 ML 训练/预测功能不可用。")
         st.caption("数据加载和可视化功能不受影响。")
         return False
 
@@ -150,7 +150,7 @@ def _post(path, json_data=None, files=None, timeout=300):
         if ok:
             st.error(f"Flask 后端连接异常（健康检查通过但 {path} 被拒绝）。请重启后端。")
         else:
-            st.error("无法连接到 Flask 后端。请在终端运行 start.bat 启动后端。")
+            st.error("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。")
         return None
     except requests.exceptions.Timeout:
         st.error(f"请求超时 ({path})。请检查后端是否正常运行。")
@@ -296,6 +296,19 @@ def regression_status():
     return _get("/regression/status")
 
 
+def list_regression_versions():
+    return _get("/regression/versions")
+
+
+def activate_regression_version(version_id):
+    return _post("/regression/activate", json_data={"version_id": version_id})
+
+
+def delete_regression_version(version_id):
+    return _post(f"/regression/version/{version_id}")
+
+
+
 # ── Classification ──
 
 def train_classification(session_id, target_col, feature_cols, lr, epochs, batch_size, device="cpu"):
@@ -320,6 +333,18 @@ def clear_classification():
 
 def classification_status():
     return _get("/classification/status")
+
+
+def list_classification_versions():
+    return _get("/classification/versions")
+
+
+def activate_classification_version(version_id):
+    return _post("/classification/activate", json_data={"version_id": version_id})
+
+
+def delete_classification_version(version_id):
+    return _post(f"/classification/version/{version_id}")
 
 
 # ── DIY MLP ──
@@ -352,6 +377,18 @@ def diy_mlp_status():
     return _get("/diy_mlp/status")
 
 
+def list_diy_mlp_versions():
+    return _get("/diy_mlp/versions")
+
+
+def activate_diy_mlp_version(version_id):
+    return _post("/diy_mlp/activate", json_data={"version_id": version_id})
+
+
+def delete_diy_mlp_version(version_id):
+    return _post(f"/diy_mlp/version/{version_id}")
+
+
 # ── Decision Tree ──
 
 def train_decision_tree(session_id, target_col, feature_cols, task_type, criterion, max_depth):
@@ -372,6 +409,18 @@ def clear_decision_tree():
 
 def decision_tree_status():
     return _get("/decision_tree/status")
+
+
+def list_decision_tree_versions():
+    return _get("/decision_tree/versions")
+
+
+def activate_decision_tree_version(version_id):
+    return _post("/decision_tree/activate", json_data={"version_id": version_id})
+
+
+def delete_decision_tree_version(version_id):
+    return _post(f"/decision_tree/version/{version_id}")
 
 
 # ── Clustering ──
@@ -399,6 +448,18 @@ def clear_clustering():
 
 def clustering_status():
     return _get("/clustering/status")
+
+
+def list_clustering_versions():
+    return _get("/clustering/versions")
+
+
+def activate_clustering_version(version_id):
+    return _post("/clustering/activate", json_data={"version_id": version_id})
+
+
+def delete_clustering_version(version_id):
+    return _post(f"/clustering/version/{version_id}")
 
 
 # ── LLM ──

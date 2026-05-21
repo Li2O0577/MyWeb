@@ -5,8 +5,8 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array
-from pages._api import train_classification, predict_classification, batch_predict_classification, clear_classification, ensure_session, classification_status, backend_status_badge, render_backend_sync_panel
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._api import train_classification, predict_classification, batch_predict_classification, clear_classification, ensure_session, classification_status, backend_status_badge, render_backend_sync_panel, list_classification_versions, activate_classification_version, delete_classification_version
 
 st.set_page_config(page_title="分类决策", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
@@ -44,6 +44,9 @@ target_options = list(df.columns)
 
 render_backend_sync_panel(df_clean)
 
+# Version selector
+active_vid = render_version_selector("分类", list_classification_versions, activate_classification_version, delete_classification_version)
+
 # Auto-detect saved model
 if "cls_result" not in st.session_state:
     status = classification_status()
@@ -51,9 +54,12 @@ if "cls_result" not in st.session_state:
         st.session_state.cls_result = {"acc": 0, "cm": [], "label_names": [], "train_losses": [], "val_losses": [], "restored": True}
         st.session_state.cls_features = status.get("features", [])
         st.session_state.cls_target = status.get("target", "")
-        st.session_state.cls_n_classes = status.get("n_classes", 2)
-        st.session_state.cls_reverse_label_map = status.get("reverse_label_map", {})
-        st.success(f"✅ 已自动加载上次保存的分类模型（目标列：{st.session_state.cls_target}，类别数={status.get('n_classes', '?')}）")
+        st.session_state.cls_n_classes = status.get("params", {}).get("n_classes", 2)
+        st.session_state.cls_reverse_label_map = {}
+        st.session_state.cls_version_id = status.get("version_id", "")
+        ds = status.get("dataset_name", "")
+        created = status.get("created_at", "")[:16].replace("T", " ")
+        st.success(f"已加载分类模型版本（{ds} | {created} | 目标列：{st.session_state.cls_target}）")
 
 st.subheader("📊 数据自动分析与模型配置")
 col1, col2 = st.columns(2)
@@ -113,8 +119,9 @@ with train_col:
                 st.session_state.cls_target = target_col
                 st.session_state.cls_n_classes = result["n_classes"]
                 st.session_state.cls_reverse_label_map = result["reverse_label_map"]
+                st.session_state.cls_version_id = result.get("version_id", "")
 
-                st.success(f"训练完成！准确率 = {result['acc']:.4f}")
+                st.success(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
 
                 cm = result["cm"]
                 label_names = result["label_names"]
@@ -137,7 +144,7 @@ with train_col:
 with clear_col:
     if st.button("清除已保存分类模型", use_container_width=True):
         clear_classification()
-        for k in ["cls_result", "cls_features", "cls_target", "cls_n_classes", "cls_reverse_label_map"]:
+        for k in ["cls_result", "cls_features", "cls_target", "cls_n_classes", "cls_reverse_label_map", "cls_version_id"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.warning("已清除分类模型！")

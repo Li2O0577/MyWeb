@@ -48,16 +48,14 @@ app.register_blueprint(llm_bp, url_prefix="/api/llm")
 @app.route("/api/health")
 def health():
     n_sessions = active_session_count()
-    # Check which models exist
-    import os as _os
-    models_dir = _os.path.join(_os.path.dirname(__file__), "models")
-    model_files = {
-        "regression": _os.path.exists(_os.path.join(models_dir, "reg_best_model.pth")),
-        "classification": _os.path.exists(_os.path.join(models_dir, "cls_best_model.pth")),
-        "diy_mlp": _os.path.exists(_os.path.join(models_dir, "diy_best_model.pth")),
-        "decision_tree": _os.path.exists(_os.path.join(models_dir, "dt_model.pkl")),
-        "clustering": _os.path.exists(_os.path.join(models_dir, "cluster_model.pkl")),
-    }
+    from models.registry import get_active_version, get_registry
+    reg = get_registry()
+    model_files = {}
+    for mt in ["regression", "classification", "diy_mlp", "decision_tree", "clustering"]:
+        active = reg.get(mt, {}).get("active")
+        n_versions = len(reg.get(mt, {}).get("versions", {}))
+        model_files[mt] = active is not None
+        model_files[f"{mt}_versions"] = n_versions
     return {
         "status": "ok",
         "active_sessions": n_sessions,

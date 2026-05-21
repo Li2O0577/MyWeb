@@ -4,7 +4,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pages._prepare import render_sidebar, data_uploader
-from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering, ensure_session, clustering_status, backend_status_badge, render_backend_sync_panel
+from pages._mlp_common import render_version_selector
+from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering, ensure_session, clustering_status, backend_status_badge, render_backend_sync_panel, list_clustering_versions, activate_clustering_version, delete_clustering_version
 
 st.set_page_config(page_title="聚类分析", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
@@ -40,15 +41,22 @@ n_samples = len(numeric_df)
 if "cluster_algorithm" not in st.session_state:
     st.session_state.cluster_algorithm = "kmeans"
 
+# Version selector
+active_vid = render_version_selector("聚类", list_clustering_versions, activate_clustering_version, delete_clustering_version)
+
 # Auto-detect saved model
 if "cluster_result" not in st.session_state:
     status = clustering_status()
     if status and status.get("has_model"):
         st.session_state.cluster_result = {}
         st.session_state.cluster_features = status.get("features", [])
-        if status.get("algorithm") == "dbscan":
+        algo = status.get("params", {}).get("algorithm", "kmeans")
+        if algo == "dbscan":
             st.session_state.cluster_algorithm = "dbscan"
-        st.success(f"✅ 已自动加载上次保存的聚类模型（{status.get('algorithm', 'kmeans')}）")
+        st.session_state.cluster_version_id = status.get("version_id", "")
+        ds = status.get("dataset_name", "")
+        created = status.get("created_at", "")[:16].replace("T", " ")
+        st.success(f"已加载聚类模型版本（{ds} | {created} | {algo}）")
 
 st.subheader("⚙️ 算法选择与参数配置")
 alg_col, *param_cols = st.columns([1, 1, 1, 2])
@@ -121,6 +129,7 @@ with train_col:
                     result = resp
                     st.session_state.cluster_result = result
                     st.session_state.cluster_features = feature_cols
+                    st.session_state.cluster_version_id = result.get("version_id", "")
 
                     if is_kmeans:
                         msg = f"✅ 聚类完成！分为 {result['n_found']} 个簇"
@@ -140,7 +149,7 @@ with train_col:
 with clear_col:
     if st.button("清除已保存聚类模型", use_container_width=True):
         clear_clustering()
-        for k in ["cluster_result", "cluster_features", "elbow_result"]:
+        for k in ["cluster_result", "cluster_features", "elbow_result", "cluster_version_id"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除聚类模型！")
 
