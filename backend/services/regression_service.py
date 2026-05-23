@@ -40,7 +40,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     cols = feature_cols + [target_col]
     df = df[cols].dropna()
     if len(df) < 10:
-        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
+        return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
     X = df[feature_cols].values
     y = df[target_col].values.reshape(-1, 1)
 
@@ -146,7 +146,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
 
     return {"r2": r2, "mae": mae, "rmse": rmse,
             "train_losses": train_losses, "val_losses": val_losses,
-            "version_id": version_id}
+            "version_id": version_id}, None
 
 
 def _load_model(device, version_id=None):

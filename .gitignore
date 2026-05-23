@@ -46,6 +46,10 @@ backend/models/registry.json
 *.bin
 *.sav
 
+# Session 数据文件（Parquet + 元数据）
+*.parquet
+*.meta.json
+
 # 临时文件
 *.tmp
 *.temp

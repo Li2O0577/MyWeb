@@ -120,8 +120,21 @@ def elbow(df, feature_cols, max_k):
     return {"ks": ks, "inertias": inertias}
 
 
+def _safe_load_pickle(path, expected_type):
+    """Load a pickle file with type validation."""
+    import pickle
+    with open(path, 'rb') as f:
+        obj = pickle.load(f)
+    if not isinstance(obj, expected_type):
+        raise TypeError(f"Expected {expected_type.__name__}, got {type(obj).__name__}")
+    return obj
+
+
 def predict_one(feature_values, version_id=None):
     """Predict cluster for a new data point (K-means only)."""
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
     paths, meta = get_model_paths("clustering", version_id)
     if not paths:
         return None, "No saved model found."
@@ -131,10 +144,8 @@ def predict_one(feature_values, version_id=None):
     if config.get("algorithm") != "kmeans":
         return None, "Only K-means supports prediction."
 
-    with open(paths["model"], 'rb') as f:
-        model = pickle.load(f)
-    with open(paths["scaler"], 'rb') as f:
-        scaler = pickle.load(f)
+    model = _safe_load_pickle(paths["model"], KMeans)
+    scaler = _safe_load_pickle(paths["scaler"], StandardScaler)
 
     input_arr = np.array([feature_values])
     input_scaled = scaler.transform(input_arr)

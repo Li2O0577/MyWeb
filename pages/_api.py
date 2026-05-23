@@ -175,6 +175,33 @@ def _get(path, timeout=30):
         return None
 
 
+def _delete(path, timeout=30):
+    """DELETE with fast-connect timeout. Returns parsed JSON or None on failure."""
+    try:
+        resp = requests.delete(f"{API_BASE}{path}", timeout=(CONNECT_TIMEOUT, timeout))
+        if resp.status_code != 200:
+            try:
+                err = _format_error_payload(resp.json(), f"HTTP {resp.status_code}")
+            except Exception:
+                err = f"HTTP {resp.status_code} (非 JSON 响应)"
+            st.error(f"API 错误 [{path}]: {err}")
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            st.error(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})")
+            return None
+    except requests.exceptions.ConnectionError:
+        st.error("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。")
+        return None
+    except requests.exceptions.Timeout:
+        st.error(f"请求超时 ({path})。请检查后端是否正常运行。")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"网络错误 ({path}): {e}")
+        return None
+
+
 # ── Data ──
 
 def ensure_session(df=None):
@@ -305,7 +332,7 @@ def activate_regression_version(version_id):
 
 
 def delete_regression_version(version_id):
-    return _post(f"/regression/version/{version_id}")
+    return _delete(f"/regression/version/{version_id}")
 
 
 
@@ -344,7 +371,7 @@ def activate_classification_version(version_id):
 
 
 def delete_classification_version(version_id):
-    return _post(f"/classification/version/{version_id}")
+    return _delete(f"/classification/version/{version_id}")
 
 
 # ── DIY MLP ──
@@ -386,7 +413,7 @@ def activate_diy_mlp_version(version_id):
 
 
 def delete_diy_mlp_version(version_id):
-    return _post(f"/diy_mlp/version/{version_id}")
+    return _delete(f"/diy_mlp/version/{version_id}")
 
 
 # ── Decision Tree ──
@@ -420,7 +447,7 @@ def activate_decision_tree_version(version_id):
 
 
 def delete_decision_tree_version(version_id):
-    return _post(f"/decision_tree/version/{version_id}")
+    return _delete(f"/decision_tree/version/{version_id}")
 
 
 # ── Clustering ──
@@ -459,7 +486,7 @@ def activate_clustering_version(version_id):
 
 
 def delete_clustering_version(version_id):
-    return _post(f"/clustering/version/{version_id}")
+    return _delete(f"/clustering/version/{version_id}")
 
 
 # ── LLM ──

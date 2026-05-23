@@ -8,14 +8,31 @@ from session_store import create_session, get_session, get_session_meta, update_
 data_bp = Blueprint("data", __name__)
 
 
+MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
+
 @data_bp.route("/upload", methods=["POST"])
 def upload():
     """Upload CSV/Excel, return session_id + data summary."""
     if 'file' not in request.files:
         return api_error("NO_FILE", "No file provided", 400, "Upload a CSV or Excel file in the `file` form field.")
     file = request.files['file']
+    # Check Content-Length before reading into memory
+    cl = request.content_length
+    if cl is not None and cl > MAX_FILE_SIZE:
+        return api_error(
+            "FILE_TOO_LARGE",
+            f"File too large ({cl / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+            413,
+            detail="Please split the file or reduce its size before uploading.",
+        )
     try:
         file_bytes = file.read()
+        if len(file_bytes) > MAX_FILE_SIZE:
+            return api_error(
+                "FILE_TOO_LARGE",
+                f"File too large ({len(file_bytes) / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+                413,
+            )
         df = parse_file(file_bytes, file.filename)
         sid = create_session(df, source_name=file.filename)
         meta = get_session_meta(sid)
@@ -101,8 +118,22 @@ def sync_data(sid):
     if 'file' not in request.files:
         return api_error("NO_FILE", "No file provided", 400, "Upload a CSV representation in the `file` form field.")
     file = request.files['file']
+    cl = request.content_length
+    if cl is not None and cl > MAX_FILE_SIZE:
+        return api_error(
+            "FILE_TOO_LARGE",
+            f"File too large ({cl / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+            413,
+        )
     try:
-        df = parse_file(file.read(), file.filename)
+        file_bytes = file.read()
+        if len(file_bytes) > MAX_FILE_SIZE:
+            return api_error(
+                "FILE_TOO_LARGE",
+                f"File too large ({len(file_bytes) / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+                413,
+            )
+        df = parse_file(file_bytes, file.filename)
         if not update_session(sid, df, source_name=file.filename):
             return session_expired()
         return jsonify({

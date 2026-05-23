@@ -55,7 +55,7 @@ def train(df, target_col, feature_cols, layers_config,
     cols = feature_cols + [target_col]
     df = df[cols].dropna()
     if len(df) < 10:
-        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
+        return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
     X = df[feature_cols].values
     if is_cls:
         y_raw = df[target_col].values
@@ -239,7 +239,7 @@ def train(df, target_col, feature_cols, layers_config,
         result["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
 
     result["version_id"] = version_id
-    return result
+    return result, None
 
 
 def _load_model(device, version_id=None):

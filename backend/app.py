@@ -7,24 +7,26 @@ from routes._responses import api_error
 from session_store import active_session_count, cleanup_expired, recent_sessions, restore_sessions
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256 MB per request
 CORS(app)
 
 restore_sessions()
 
 
 # ── Periodic cleanup ──
-def _cleanup_expired():
-    cleanup_expired()
-
-
-def _start_cleanup_timer():
-    _cleanup_expired()
-    t = threading.Timer(300, _start_cleanup_timer)
+def _schedule_cleanup(interval=300):
+    """Run cleanup on a recurring timer. Each cycle is exception-isolated so a
+    single failure cannot kill the entire cleanup chain."""
+    try:
+        cleanup_expired()
+    except Exception:
+        pass
+    t = threading.Timer(interval, _schedule_cleanup, args=[interval])
     t.daemon = True
     t.start()
 
 
-_start_cleanup_timer()
+_schedule_cleanup()
 
 
 # ── Register blueprints ──
@@ -69,6 +71,16 @@ def not_found(_err):
     return api_error("NOT_FOUND", "API endpoint not found", 404)
 
 
+@app.errorhandler(413)
+def too_large(_err):
+    return api_error(
+        "PAYLOAD_TOO_LARGE",
+        "Uploaded file exceeds the 256 MB size limit",
+        413,
+        detail="Please split the file or reduce its size before uploading.",
+    )
+
+
 @app.errorhandler(500)
 def internal_error(err):
     return api_error("INTERNAL_ERROR", "Internal server error", 500, str(err))
@@ -79,4 +91,5 @@ if __name__ == "__main__":
     # debugger but avoid the watchdog reloader bug on Windows (duplicate
     # listener processes that accept TCP but never respond)
     port = int(os.environ.get("FLASK_PORT", "5001"))
-    app.run(port=port, debug=True, use_reloader=False)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(port=port, debug=debug, use_reloader=False)

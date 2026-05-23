@@ -22,7 +22,7 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
     cols = feature_cols + [target_col]
     df = df[cols].dropna()
     if len(df) < 10:
-        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
+        return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
     X = df[feature_cols]
     y = df[target_col]
 
@@ -135,7 +135,19 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
         result["criterion_name"] = criterion_name
 
     result["version_id"] = version_id
-    return result
+    return result, None
+
+
+def _safe_load_pickle(path):
+    """Load a pickle file with type validation for sklearn models."""
+    import pickle
+    from sklearn.pipeline import Pipeline
+
+    with open(path, 'rb') as f:
+        obj = pickle.load(f)
+    if not isinstance(obj, Pipeline):
+        raise TypeError(f"Expected sklearn Pipeline, got {type(obj).__name__}")
+    return obj
 
 
 def predict_one(input_dict, task_type, version_id=None):
@@ -145,8 +157,7 @@ def predict_one(input_dict, task_type, version_id=None):
     if not paths:
         return None, "No saved model found."
 
-    with open(paths["model"], 'rb') as f:
-        pipeline = pickle.load(f)
+    pipeline = _safe_load_pickle(paths["model"])
     input_df = pd.DataFrame(input_dict)
     pred = pipeline.predict(input_df)[0]
     if task_type == "classification":

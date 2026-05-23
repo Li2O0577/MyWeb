@@ -36,12 +36,15 @@ def detect_outliers(df):
     return outliers
 
 
-def build_data_summary(df):
-    """Generate a text summary of the dataset (for LLM analysis)."""
+def build_data_summary(df, max_chars=8000):
+    """Generate a text summary of the dataset (for LLM analysis). Truncated to max_chars."""
     lines = []
     lines.append("## Data Summary")
     lines.append(f"- Rows: {df.shape[0]}, Columns: {df.shape[1]}")
-    lines.append(f"- Column names: {', '.join(str(c) for c in df.columns)}")
+    col_names = ', '.join(str(c) for c in df.columns)
+    if len(col_names) > 500:
+        col_names = col_names[:497] + "..."
+    lines.append(f"- Column names: {col_names}")
     lines.append("")
 
     lines.append("### Column Types")
@@ -51,51 +54,70 @@ def build_data_summary(df):
     lines.append("")
 
     numeric_cols = df.select_dtypes(include=[np.number]).columns
-    if len(numeric_cols) > 0:
+    if len(numeric_cols) > 0 and len(numeric_cols) <= 100:
+        desc = df[numeric_cols].describe().to_string()
+        if len(desc) > 2000:
+            desc = desc[:1997] + "..."
         lines.append("### Numeric Columns Statistics")
-        lines.append(df[numeric_cols].describe().to_string())
+        lines.append(desc)
         lines.append("")
 
-        if len(numeric_cols) >= 2 and len(numeric_cols) <= 100:
+        if len(numeric_cols) >= 2:
             corr = df[numeric_cols].corr()
             corr_upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
             corr_pairs = corr_upper.stack().reset_index()
             corr_pairs.columns = ["Col A", "Col B", "Correlation"]
             corr_pairs["AbsCorr"] = corr_pairs["Correlation"].abs()
-            corr_top = corr_pairs.sort_values("AbsCorr", ascending=False).head(10)
+            corr_top = corr_pairs.sort_values("AbsCorr", ascending=False).head(5)
             if len(corr_top) > 0:
                 lines.append("### Top Correlations")
                 for _, row in corr_top.iterrows():
                     lines.append(f"- {row['Col A']} vs {row['Col B']}: {row['Correlation']:.3f}")
                 lines.append("")
-        elif len(numeric_cols) > 100:
-            lines.append(f"### Top Correlations (skipped — {len(numeric_cols)} numeric columns too many)")
-            lines.append("")
+    elif len(numeric_cols) > 100:
+        lines.append(f"### Numeric Columns: {len(numeric_cols)} (statistics skipped)")
+        lines.append("")
 
     cat_cols = df.select_dtypes(exclude=[np.number]).columns
     if len(cat_cols) > 0:
         lines.append("### Categorical Columns")
+        shown = 0
         for col in cat_cols:
             n_unique = df[col].nunique()
             n_total = df[col].notna().sum()
             lines.append(f"- **{col}**: {n_unique} unique / {n_total} non-null")
+            shown += 1
+            if shown >= 20:
+                lines.append(f"- ... and {len(cat_cols) - shown} more columns")
+                break
         lines.append("")
 
     missing = df.isnull().sum()
     missing = missing[missing > 0]
     if len(missing) > 0:
         lines.append("### Missing Values")
+        shown = 0
         for col, cnt in missing.items():
             lines.append(f"- {col}: {cnt} ({cnt/len(df)*100:.1f}%)")
+            shown += 1
+            if shown >= 10:
+                lines.append(f"- ... and {len(missing) - shown} more")
+                break
         lines.append("")
     else:
         lines.append("### Missing Values: None")
         lines.append("")
 
     lines.append("### First 5 Rows (Preview)")
-    lines.append(df.head(5).to_string())
+    preview = df.head(5).to_string()
+    if len(preview) > 1500:
+        preview = preview[:1497] + "..."
+    lines.append(preview)
 
-    return "\n".join(lines)
+    full = "\n".join(lines)
+    if len(full) > max_chars:
+        full = full[:max_chars - 3] + "..."
+    return full
 
 
 def serialize_preview(df, rows=100):

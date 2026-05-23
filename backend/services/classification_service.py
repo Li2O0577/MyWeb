@@ -40,7 +40,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     cols = feature_cols + [target_col]
     df = df[cols].dropna()
     if len(df) < 10:
-        return {"error": f"Insufficient clean data: {len(df)} rows after dropping NaN"}
+        return None, f"Insufficient clean data: {len(df)} rows after dropping NaN"
     y_raw = df[target_col].values
     unique_labels = np.unique(y_raw)
     label_map = {lbl: i for i, lbl in enumerate(unique_labels)}
@@ -188,7 +188,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
         "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()},
         "train_losses": train_losses, "val_losses": val_losses,
         "version_id": version_id
-    }
+    }, None
 
 
 def _load_model(device, version_id=None):

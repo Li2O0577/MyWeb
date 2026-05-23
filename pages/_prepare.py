@@ -126,15 +126,15 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
 
     if 'main_df' in st.session_state:
         df = st.session_state['main_df']
-        if 'outliers' not in st.session_state:
-            st.session_state.outliers = detect_outliers(df)
+        # Always re-detect — main_df may have changed columns (e.g. PCA in processing page)
+        st.session_state.outliers = detect_outliers(df)
         outlier_info = st.session_state.outliers
         if warn_outliers and outlier_info:
             total = sum(v["count"] for v in outlier_info.values())
             cols = len(outlier_info)
             st.warning(
-                f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
+                f"检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
+                f"建议前往 **数据加载** 页面查看详情并进行处理。"
             )
         return df
 

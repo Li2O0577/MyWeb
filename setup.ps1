@@ -63,9 +63,9 @@ foreach ($pkg in $frontendPkgs) {
 # ── 3. 安装后端依赖 (Flask) ──
 Write-Host ""
 Write-Host "[3/5] 安装后端依赖 (Flask)..." -ForegroundColor Yellow
-Write-Host "    flask, flask-cors, torch, requests"
+Write-Host "    flask, flask-cors, torch, requests, pyarrow"
 
-$backendPkgs = @("flask", "flask-cors", "requests")
+$backendPkgs = @("flask", "flask-cors", "requests", "pyarrow")
 foreach ($pkg in $backendPkgs) {
     Write-Host "    → $pkg" -NoNewline
     & $pythonCmd -m pip install -q $pkg 2>&1 | Out-Null
@@ -130,6 +130,7 @@ $checks = @(
     @{Module="plotly"; Desc="plotly"},
     @{Module="requests"; Desc="requests"},
     @{Module="openpyxl"; Desc="openpyxl"},
+    @{Module="pyarrow"; Desc="PyArrow"},
     @{Module="torch"; Desc="PyTorch"}
 )
 

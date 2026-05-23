@@ -52,6 +52,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 | PyTorch | 2.0+ | 建议 GPU 版，CPU 版训练较慢 |
 | pandas | 2.0+ | |
 | scikit-learn | 1.3+ | |
+| pyarrow | 14.0+ | Session 安全持久化 |
 | Streamlit | 1.28+ | 前端 |
 
 > **⚠️ 如果遇到 `ImportError: cannot import name 'url_quote' from 'werkzeug.urls'`**
@@ -86,12 +87,14 @@ streamlit run main.py
 # → http://localhost:8501
 ```
 
-后端端口可通过环境变量 `FLASK_PORT` 修改，默认 `5001`。
-
 可选配置：
 
-- 后端端口：设置环境变量 `FLASK_PORT`，默认 `5001`
-- 前端 API 地址：设置环境变量 `INDETERMINATE_API_BASE`，默认 `http://127.0.0.1:5001/api`
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `FLASK_PORT` | `5001` | Flask 后端端口 |
+| `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（有安全风险，仅开发用） |
+| `INDETERMINATE_API_BASE` | `http://127.0.0.1:5001/api` | 前端 API 地址 |
+| `LLM_API_KEY` | 无 | LLM 默认 API 密钥，设置后前端无需手动填写 |
 
 ### 3. 使用
 
@@ -125,15 +128,18 @@ MyWeb1/
 ├── backend/                     # Flask 后端
 │   ├── app.py                   # Flask 入口（session 管理、blueprint 注册）
 │   ├── requirements.txt         # 后端依赖
-│   ├── session_store.py          # Session 持久化（内存 + 磁盘），支持重启恢复
+│   ├── session_store.py         # Session 持久化（内存 + Parquet/JSON 磁盘），支持重启恢复
 │   ├── routes/                  # API 路由层（参数校验 + 调用 service）
+│   │   ├── _versioning.py       # 共享版本管理路由工厂（5 模块共用）
+│   │   ├── _helpers.py          # 列名适配工具
+│   │   ├── _responses.py        # 统一错误响应格式
 │   │   ├── data_routes.py       # /api/data/*
 │   │   ├── regression_routes.py # /api/regression/*
 │   │   ├── classification_routes.py
 │   │   ├── diy_mlp_routes.py
 │   │   ├── decision_tree_routes.py
 │   │   ├── clustering_routes.py
-│   │   └── llm_routes.py
+│   │   └── llm_routes.py        # SSE 流式聊天
 │   ├── services/                # 业务逻辑层（从 Streamlit 抽出的核心计算）
 │   │   ├── data_service.py
 │   │   ├── regression_service.py
@@ -145,7 +151,7 @@ MyWeb1/
 │   ├── models/                    # 模型版本存储 + 注册表
 │   │   ├── registry.py            # 版本注册表管理器
 │   │   └── {type}/{version_id}/   # 各版本目录（.gitignore 排除）
-│   ├── sessions/                  # Flask session 持久化（.gitignore 排除）
+│   ├── sessions/                  # Session 持久化 (Parquet + JSON, .gitignore 排除)
 └── .gitignore
 ```
 
@@ -208,9 +214,18 @@ MyWeb1/
 - **聚类**：K-means + DBSCAN，肘部法则，轮廓系数，PCA 可视化
 
 ### 大模型分析 (Page 9)
-- Smart 模式：发送数据摘要，AI 推荐分析方向
+- Smart 模式：发送数据摘要（自动截断至 8000 字符），AI 推荐分析方向
 - Direct 模式：发送原始数据，AI 自定义分析
 - SSE 流式响应，聊天界面
+- API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ 环境密钥支持
+
+## 安全设计
+
+- **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启
+- **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；支持从环境变量读取密钥
+- **文件上传**：256MB 硬限制，防止内存耗尽
+- **Session 存储**：Parquet + JSON 替代 pickle，消除反序列化代码执行风险
+- **模型加载**：sklearn Pipeline / KMeans 加载时进行类型验证
 
 ## 开发者
 
