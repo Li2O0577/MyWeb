@@ -55,16 +55,23 @@ if df is not None:
         with chart_col:
             trendline_map = {"无": None, "OLS 线性回归": "ols", "LOWESS 平滑曲线": "lowess"}
             marginal_map = {"无": None, "直方图": "histogram", "箱线图": "box", "小提琴图": "violin"}
-            kwargs = dict(x=x_col, y=y_col, title=chart_title or f"{x_col} vs {y_col}", template=color_template, width=fig_width, height=fig_height)
-            if color_col != "无": kwargs["color"] = color_col
-            if size_col != "无": kwargs["size"] = size_col; kwargs["size_max"] = 20
-            if hover_cols: kwargs["hover_data"] = {c: True for c in hover_cols}
             tl = trendline_map[trendline_label]
-            if tl: kwargs["trendline"] = tl
-            mg = marginal_map[marginal_label]
-            if mg: kwargs["marginal_x"] = mg; kwargs["marginal_y"] = mg
-            fig = px.scatter(df, **kwargs)
-            st.plotly_chart(fig, use_container_width=True)
+            if x_col == y_col and tl is not None:
+                st.error(f"X 轴和 Y 轴选择了相同的列「{x_col}」，无法添加趋势线。请选择不同的列，或将趋势线设为「无」。")
+            elif x_col == y_col:
+                st.warning(f"X 轴和 Y 轴选择了相同的列「{x_col}」，散点图将退化为对角线。建议选择不同的列。")
+                fig = px.scatter(df, x=x_col, y=y_col, title=chart_title or f"{x_col} vs {y_col}", template=color_template, width=fig_width, height=fig_height)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                kwargs = dict(x=x_col, y=y_col, title=chart_title or f"{x_col} vs {y_col}", template=color_template, width=fig_width, height=fig_height)
+                if color_col != "无": kwargs["color"] = color_col
+                if size_col != "无": kwargs["size"] = size_col; kwargs["size_max"] = 20
+                if hover_cols: kwargs["hover_data"] = {c: True for c in hover_cols}
+                if tl: kwargs["trendline"] = tl
+                mg = marginal_map[marginal_label]
+                if mg: kwargs["marginal_x"] = mg; kwargs["marginal_y"] = mg
+                fig = px.scatter(df, **kwargs)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "折线图":
         with config_col:
@@ -76,16 +83,21 @@ if df is not None:
             agg_label = st.selectbox("聚合方式", ["无", "均值", "求和", "计数", "中位数", "最小值", "最大值"])
         with chart_col:
             if y_cols:
-                plot_df = df.copy()
                 x_label = None if x_col == "⟳ 自动索引" else x_col
                 color_arg = group_col if group_col != "无" else None
-                if agg_label != "无" and x_col != "⟳ 自动索引":
-                    agg_map = {"均值": "mean", "求和": "sum", "计数": "count", "中位数": "median", "最小值": "min", "最大值": "max"}
-                    group_keys = [x_col]
-                    if color_arg: group_keys.append(group_col)
-                    plot_df = df.groupby(group_keys, as_index=False)[y_cols].agg(agg_map[agg_label])
-                fig = px.line(plot_df, x=x_label, y=y_cols, color=color_arg, title=chart_title or "折线图", template=color_template, width=fig_width, height=fig_height)
-                st.plotly_chart(fig, use_container_width=True)
+                if x_label is not None and x_label == group_col:
+                    st.error(f"X 轴列「{x_col}」与分组列相同，聚合时会产生重复列名导致错误。请选择不同的分组列，或将聚合设为「无」。")
+                else:
+                    plot_df = df.copy()
+                    if agg_label != "无" and x_col != "⟳ 自动索引":
+                        agg_map = {"均值": "mean", "求和": "sum", "计数": "count", "中位数": "median", "最小值": "min", "最大值": "max"}
+                        group_keys = [x_col]
+                        if color_arg: group_keys.append(group_col)
+                        plot_df = df.groupby(group_keys, as_index=False)[y_cols].agg(agg_map[agg_label])
+                    elif agg_label != "无":
+                        st.caption("使用自动索引时，聚合按默认索引分组，效果与不聚合相同。")
+                    fig = px.line(plot_df, x=x_label, y=y_cols, color=color_arg, title=chart_title or "折线图", template=color_template, width=fig_width, height=fig_height)
+                    st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("请至少选择一个 Y 轴列。")
 
@@ -99,18 +111,23 @@ if df is not None:
             orient_label = st.radio("方向", ["垂直", "水平"], horizontal=True)
             bar_mode_label = st.selectbox("柱状模式", ["分组", "堆叠", "相对比例"])
         with chart_col:
-            plot_df = df.copy()
-            if agg_label != "无":
-                agg_map = {"均值": "mean", "求和": "sum", "计数": "count", "中位数": "median", "最小值": "min", "最大值": "max"}
-                group_keys = [x_col]
-                if color_col != "无": group_keys.append(color_col)
-                plot_df = df.groupby(group_keys, as_index=False)[y_col].agg(agg_map[agg_label])
-            orient_map = {"垂直": "v", "水平": "h"}
-            bar_mode_map = {"分组": "group", "堆叠": "stack", "相对比例": "relative"}
-            kwargs = dict(x=x_col, y=y_col, orientation=orient_map[orient_label], title=chart_title or f"{y_col} 按 {x_col}", template=color_template, width=fig_width, height=fig_height)
-            if color_col != "无": kwargs["color"] = color_col; kwargs["barmode"] = bar_mode_map[bar_mode_label]
-            fig = px.bar(plot_df, **kwargs)
-            st.plotly_chart(fig, use_container_width=True)
+            if not numeric_cols:
+                st.error("柱状图需要数值列作为 Y 轴，但数据集中未检测到数值列。")
+            elif agg_label != "无" and x_col == color_col:
+                st.error(f"X 轴列「{x_col}」与颜色分组列相同，聚合时会产生重复列名导致错误。请选择不同的分组列，或将聚合设为「无」。")
+            else:
+                plot_df = df.copy()
+                if agg_label != "无":
+                    agg_map = {"均值": "mean", "求和": "sum", "计数": "count", "中位数": "median", "最小值": "min", "最大值": "max"}
+                    group_keys = [x_col]
+                    if color_col != "无": group_keys.append(color_col)
+                    plot_df = df.groupby(group_keys, as_index=False)[y_col].agg(agg_map[agg_label])
+                orient_map = {"垂直": "v", "水平": "h"}
+                bar_mode_map = {"分组": "group", "堆叠": "stack", "相对比例": "relative"}
+                kwargs = dict(x=x_col, y=y_col, orientation=orient_map[orient_label], title=chart_title or f"{y_col} 按 {x_col}", template=color_template, width=fig_width, height=fig_height)
+                if color_col != "无": kwargs["color"] = color_col; kwargs["barmode"] = bar_mode_map[bar_mode_label]
+                fig = px.bar(plot_df, **kwargs)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "面积图":
         with config_col:
@@ -143,11 +160,14 @@ if df is not None:
             histnorm_label = st.selectbox("归一化方式", ["计数", "百分比", "概率", "密度"])
             cumulative = st.checkbox("累积")
         with chart_col:
-            marginal_map = {"无": None, "箱线图": "box", "须图": "rug", "小提琴图": "violin"}
-            histnorm_map = {"计数": None, "百分比": "percent", "概率": "probability", "密度": "density"}
-            color_arg = hist_color if hist_color != "无" else None
-            fig = px.histogram(df, x=col, nbins=nbins, color=color_arg, marginal=marginal_map[marginal_label], histnorm=histnorm_map[histnorm_label], cumulative=cumulative, title=chart_title or f"直方图: {col}", template=color_template, width=fig_width, height=fig_height)
-            st.plotly_chart(fig, use_container_width=True)
+            if not numeric_cols:
+                st.error("直方图需要数值列，但数据集中未检测到数值列。请上传包含数值列的数据集。")
+            else:
+                marginal_map = {"无": None, "箱线图": "box", "须图": "rug", "小提琴图": "violin"}
+                histnorm_map = {"计数": None, "百分比": "percent", "概率": "probability", "密度": "density"}
+                color_arg = hist_color if hist_color != "无" else None
+                fig = px.histogram(df, x=col, nbins=nbins, color=color_arg, marginal=marginal_map[marginal_label], histnorm=histnorm_map[histnorm_label], cumulative=cumulative, title=chart_title or f"直方图: {col}", template=color_template, width=fig_width, height=fig_height)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "箱线图":
         with config_col:
@@ -158,12 +178,15 @@ if df is not None:
             points_label = st.selectbox("显示数据点", ["仅异常值", "全部点", "疑似异常值", "不显示"])
             orient_label = st.radio("方向", ["垂直", "水平"], horizontal=True)
         with chart_col:
-            x_arg = x_col if x_col != "无" else None
-            color_arg = color_col if color_col != "无" else None
-            points_map = {"仅异常值": "outliers", "全部点": "all", "疑似异常值": "suspectedoutliers", "不显示": False}
-            orient_map = {"垂直": "v", "水平": "h"}
-            fig = px.box(df, x=x_arg, y=y_col, color=color_arg, points=points_map[points_label], orientation=orient_map[orient_label], title=chart_title or f"箱线图: {y_col}", template=color_template, width=fig_width, height=fig_height)
-            st.plotly_chart(fig, use_container_width=True)
+            if not numeric_cols:
+                st.error("箱线图需要数值列作为 Y 轴，但数据集中未检测到数值列。")
+            else:
+                x_arg = x_col if x_col != "无" else None
+                color_arg = color_col if color_col != "无" else None
+                points_map = {"仅异常值": "outliers", "全部点": "all", "疑似异常值": "suspectedoutliers", "不显示": False}
+                orient_map = {"垂直": "v", "水平": "h"}
+                fig = px.box(df, x=x_arg, y=y_col, color=color_arg, points=points_map[points_label], orientation=orient_map[orient_label], title=chart_title or f"箱线图: {y_col}", template=color_template, width=fig_width, height=fig_height)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "小提琴图":
         with config_col:
@@ -174,11 +197,14 @@ if df is not None:
             box_inside = st.checkbox("内部显示箱线图", value=True)
             points_label = st.selectbox("显示数据点", ["仅异常值", "全部点", "疑似异常值", "不显示"])
         with chart_col:
-            x_arg = x_col if x_col != "无" else None
-            color_arg = color_col if color_col != "无" else None
-            points_map = {"仅异常值": "outliers", "全部点": "all", "疑似异常值": "suspectedoutliers", "不显示": False}
-            fig = px.violin(df, x=x_arg, y=y_col, color=color_arg, box=box_inside, points=points_map[points_label], title=chart_title or f"小提琴图: {y_col}", template=color_template, width=fig_width, height=fig_height)
-            st.plotly_chart(fig, use_container_width=True)
+            if not numeric_cols:
+                st.error("小提琴图需要数值列作为 Y 轴，但数据集中未检测到数值列。")
+            else:
+                x_arg = x_col if x_col != "无" else None
+                color_arg = color_col if color_col != "无" else None
+                points_map = {"仅异常值": "outliers", "全部点": "all", "疑似异常值": "suspectedoutliers", "不显示": False}
+                fig = px.violin(df, x=x_arg, y=y_col, color=color_arg, box=box_inside, points=points_map[points_label], title=chart_title or f"小提琴图: {y_col}", template=color_template, width=fig_width, height=fig_height)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "二维密度热力图":
         with config_col:
@@ -190,8 +216,11 @@ if df is not None:
             color_scale = st.selectbox("色彩映射", ["Viridis", "Plasma", "Inferno", "Magma", "Blues", "Reds", "Greens", "Turbo", "Hot", "Jet"])
         with chart_col:
             marginal_map = {"无": None, "直方图": "histogram", "箱线图": "box", "小提琴图": "violin"}
-            fig = px.density_heatmap(df, x=x_col, y=y_col, marginal_x=marginal_map[marginal_label], marginal_y=marginal_map[marginal_label], color_continuous_scale=color_scale, title=chart_title or f"二维密度: {x_col} vs {y_col}", template=color_template, width=fig_width, height=fig_height)
-            st.plotly_chart(fig, use_container_width=True)
+            if x_col == y_col:
+                st.error(f"X 轴和 Y 轴选择了相同的列「{x_col}」，无法绘制二维密度热力图。请选择不同的列。")
+            else:
+                fig = px.density_heatmap(df, x=x_col, y=y_col, marginal_x=marginal_map[marginal_label], marginal_y=marginal_map[marginal_label], color_continuous_scale=color_scale, title=chart_title or f"二维密度: {x_col} vs {y_col}", template=color_template, width=fig_width, height=fig_height)
+                st.plotly_chart(fig, use_container_width=True)
 
     elif chart_type == "饼图 / 环形图":
         with config_col:
@@ -217,7 +246,9 @@ if df is not None:
             matrix_cols = st.multiselect("选择列 (建议 2-6 个)", numeric_cols if numeric_cols else all_cols, default=defaults)
             color_col = st.selectbox("颜色 (可选)", ["无"] + all_cols)
         with chart_col:
-            if len(matrix_cols) >= 2:
+            if not numeric_cols:
+                st.error("成对关系图需要数值列，但数据集中未检测到数值列。")
+            elif len(matrix_cols) >= 2:
                 color_arg = color_col if color_col != "无" else None
                 fig = px.scatter_matrix(df, dimensions=matrix_cols, color=color_arg, title=chart_title or "成对关系图", template=color_template, width=fig_width, height=fig_height)
                 st.plotly_chart(fig, use_container_width=True)
@@ -254,11 +285,15 @@ if df is not None:
                 st.warning("需要至少 3 个数值列。")
         with chart_col:
             if len(numeric_cols) >= 3:
-                kwargs = dict(x=x_col, y=y_col, z=z_col, title=chart_title or f"3D: {x_col} × {y_col} × {z_col}", template=color_template, width=fig_width, height=fig_height)
-                if color_col != "无": kwargs["color"] = color_col
-                if size_col != "无": kwargs["size"] = size_col; kwargs["size_max"] = 15
-                fig = px.scatter_3d(df, **kwargs)
-                st.plotly_chart(fig, use_container_width=True)
+                if len({x_col, y_col, z_col}) < 3:
+                    dup_cols = [c for c in [x_col, y_col, z_col] if [x_col, y_col, z_col].count(c) > 1]
+                    st.error(f"X/Y/Z 轴存在重复的列「{set(dup_cols)}」，请为每个轴选择不同的列。")
+                else:
+                    kwargs = dict(x=x_col, y=y_col, z=z_col, title=chart_title or f"3D: {x_col} × {y_col} × {z_col}", template=color_template, width=fig_width, height=fig_height)
+                    if color_col != "无": kwargs["color"] = color_col
+                    if size_col != "无": kwargs["size"] = size_col; kwargs["size_max"] = 15
+                    fig = px.scatter_3d(df, **kwargs)
+                    st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning("数值列不足，无法绘制 3D 散点图 (需要 ≥ 3)。")
 else:
