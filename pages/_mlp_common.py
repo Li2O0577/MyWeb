@@ -16,7 +16,7 @@ def render_device_selector():
     device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
     if device_choice == "CUDA (GPU)":
         if not torch.cuda.is_available():
-            st.error("❌ 设备选择错误：当前环境未安装 CUDA/GPU，无法使用 CUDA！请切换为 CPU")
+            st.toast("❌ 设备选择错误：当前环境未安装 CUDA/GPU，无法使用 CUDA！请切换为 CPU", icon="❌")
             st.stop()
         device = torch.device("cuda")
         st.success("✅ 已启用：CUDA GPU")
@@ -121,7 +121,7 @@ def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
             if st.button("✅ 激活", key=f"activate_{model_label}", use_container_width=True):
                 if selected_vid and selected_vid != active:
                     activate_fn(selected_vid)
-                    st.success(f"已激活版本 {selected_vid[:20]}...")
+                    st.toast(f"已激活版本 {selected_vid[:20]}...", icon="✅")
                     st.rerun()
 
         with col3:

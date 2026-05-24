@@ -220,14 +220,14 @@ with train_col:
         if task_type == "分类 (Classification)":
             class_counts = df_clean[target_col].value_counts()
             if class_counts.min() < 2:
-                st.error("❌ 每个类别至少需要 2 个样本！")
+                st.toast("❌ 每个类别至少需要 2 个样本！", icon="❌")
                 st.stop()
 
         train_df = df_clean if "分类" in task_type else numeric_df
         with st.spinner("训练中（后端 Flask 计算）..."):
             sid = ensure_session(train_df)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
                 st.stop()
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             task_str = "classification" if "分类" in task_type else "regression"
@@ -250,13 +250,13 @@ with train_col:
                     st.session_state.diy_reverse_label_map = result["reverse_label_map"]
 
                 if task_str == "regression":
-                    st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                    st.toast(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
                 else:
-                    st.success(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                    st.toast(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
 
                 plot_loss_curve(result["train_losses"], result["val_losses"])
             else:
-                st.error(f"训练失败：{result}")
+                st.toast(f"训练失败：{result}", icon="❌")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
@@ -292,23 +292,23 @@ else:
 
     if st.button("执行预测", use_container_width=True, type="primary"):
         if len(input_data) != len(features):
-            st.error("输入特征数与模型特征数不匹配！")
+            st.toast("输入特征数与模型特征数不匹配！", icon="❌")
         else:
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             err = validate_input_array(np.array([input_data]), "单条预测")
             if err:
-                st.error(err)
+                st.toast(err, icon="❌")
             else:
                 result = predict_diy_mlp(input_data, device_str)
                 if result:
                     if task == "regression":
-                        st.success(f"预测结果：**{result['result']:.4f}**")
+                        st.toast(f"预测结果：**{result['result']:.4f}**", icon="✅")
                     else:
                         n_cls = st.session_state.diy_n_classes
                         reverse_label_map = st.session_state.diy_reverse_label_map
                         pred_idx = result["pred_idx"]
                         pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
-                        st.success(f"预测类别：**{pred_class}** | 置信度：**{result['prob']:.4f}**")
+                        st.toast(f"预测类别：**{pred_class}** | 置信度：**{result['prob']:.4f}**", icon="✅")
                         if n_cls > 2 and "all_probs" in result:
                             st.write("各类别概率：")
                             prob_df = pd.DataFrame({
@@ -324,13 +324,13 @@ else:
         batch_df = pd.read_csv(batch_file)
         missing_cols = set(features) - set(batch_df.columns)
         if missing_cols:
-            st.error(f"缺少特征列：{missing_cols}")
+            st.toast(f"缺少特征列：{missing_cols}", icon="❌")
         else:
             batch_X = batch_df[features].values
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             err = validate_input_array(batch_X, "批量预测")
             if err:
-                st.error(err)
+                st.toast(err, icon="❌")
             else:
                 result = batch_predict_diy_mlp(batch_X.tolist(), device_str)
                 if result:

@@ -25,8 +25,8 @@
     └── Flask SSE ── LLM 流式聊天
 ```
 
-- **Streamlit** 负责全部 UI：页面布局、Plotly 图表、数据预览、参数控件
-- **Flask** 负责全部计算：数据解析、模型训练、推理预测、LLM 代理
+- **Streamlit** 负责 UI 和数据预处理：页面布局、Plotly 图表、数据加载、特征工程（缩放/编码/PCA）
+- **Flask** 负责 ML 计算和会话管理：数据解析、模型训练、推理预测、LLM 代理
 - 前后端通过 HTTP JSON 通信，Flask 无状态（session 数据 TTL 1 小时）
 
 ## 快速开始
@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 | pandas | 2.0+ | |
 | scikit-learn | 1.3+ | |
 | pyarrow | 14.0+ | Session 安全持久化 |
-| Streamlit | 1.28+ | 前端 |
+| Streamlit | 1.35+ | 前端（需 st.toast 支持） |
 
 > **⚠️ 如果遇到 `ImportError: cannot import name 'url_quote' from 'werkzeug.urls'`**
 > 
@@ -114,7 +114,7 @@ MyWeb1/
 ├── setup.bat / setup.ps1        # 一键环境配置
 ├── pages/                       # Streamlit 页面
 │   ├── _api.py                  # Flask API 客户端（所有后端调用集中管理）
-│   ├── _prepare.py              # 公共组件（数据上传、侧边栏导航、异常值检测）
+│   ├── _prepare.py              # 公共组件（数据上传、侧边栏导航，detect_outliers 从 backend 导入）
 │   ├── _mlp_common.py           # MLP UI 工具（设备选择器、损失曲线、输入校验）
 │   ├── 1_data_load.py           # 数据加载 + IQR 异常值修复
 │   ├── 2_data_visualization.py  # 12 种交互式图表（Plotly）
@@ -204,7 +204,8 @@ MyWeb1/
 ### 数据处理 (Page 3)
 - 行列筛选/增减/重命名、类型转换
 - StandardScaler / MinMaxScaler、PCA 降维
-- 标签编码 / 独热编码、自定义计算列、高斯噪声
+- 标签编码 / 独热编码、高斯噪声
+- 自定义计算列：简单计算（一元/二元运算）+ 自定义表达式（`df.eval`）
 
 ### ML 模块 (Page 4–8)
 - **回归**：PyTorch MLP，R²/MAE/RMSE，损失曲线

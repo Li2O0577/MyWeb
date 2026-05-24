@@ -109,7 +109,7 @@ with train_col:
         with st.spinner("训练中（后端 Flask 计算）..."):
             sid = ensure_session(df_clean)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
                 st.stop()
             task_str = "classification" if is_cls else "regression"
             result = train_decision_tree(
@@ -126,9 +126,9 @@ with train_col:
                 st.session_state.dt_version_id = result.get("version_id", "")
 
                 if is_cls:
-                    st.success(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                    st.toast(f"✅ 训练完成！测试集准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
                 else:
-                    st.success(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                    st.toast(f"✅ 训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
 
                 if is_cls and "cm" in result:
                     cm = result["cm"]
@@ -151,7 +151,7 @@ with train_col:
                     st.markdown("### 📊 每层节点详细信息")
                     st.dataframe(pd.DataFrame(result["tree_nodes"]), use_container_width=True)
             else:
-                st.error(f"训练失败：{result}")
+                st.toast(f"训练失败：{result}", icon="❌")
 
 with clear_col:
     if st.button("清除已保存决策树模型", use_container_width=True):
@@ -200,6 +200,6 @@ else:
         result = predict_decision_tree(input_data, task_str)
         if result:
             if predict_is_cls:
-                st.success(f"🎯 预测类别：{result['pred_class']}")
+                st.toast(f"🎯 预测类别：{result['pred_class']}", icon="✅")
             else:
-                st.success(f"🎯 预测结果：{result['pred_value']:.4f}")
+                st.toast(f"🎯 预测结果：{result['pred_value']:.4f}", icon="✅")

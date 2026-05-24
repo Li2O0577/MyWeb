@@ -158,11 +158,11 @@ with col_send:
 
 if send_btn:
     if not api_key:
-        st.error("请输入 API Key。")
+        st.toast("请输入 API Key。", icon="❌")
     elif not model:
-        st.error("请输入模型名称。")
+        st.toast("请输入模型名称。", icon="❌")
     elif not user_input.strip():
-        st.error("请输入消息。")
+        st.toast("请输入消息。", icon="❌")
     else:
         st.session_state.chat_messages.append({"role": "user", "content": user_input.strip()})
 
@@ -202,7 +202,7 @@ if send_btn:
                     st.session_state.chat_messages.pop()
                     if data_was_attached:
                         st.session_state.chat_data_sent = False
-                    st.error(f"API 错误 [{resp.status_code}]")
+                    st.toast(f"API 错误 [{resp.status_code}]", icon="❌")
                     st.stop()
 
                 for line in resp.iter_lines(decode_unicode=True):
@@ -221,9 +221,9 @@ if send_btn:
                                 message = err.get("message", "请求失败")
                                 detail = err.get("detail", "")
                                 suffix = f" ({detail})" if detail and detail != message else ""
-                                st.error(f"API 错误: {code}: {message}{suffix}")
+                                st.toast(f"API 错误: {code}: {message}{suffix}", icon="❌")
                             else:
-                                st.error(f"API 错误: {err}")
+                                st.toast(f"API 错误: {err}", icon="❌")
                             st.stop()
                         if event.get("done"):
                             break
@@ -241,13 +241,13 @@ if send_btn:
                     st.session_state.chat_messages.pop()
                     if data_was_attached:
                         st.session_state.chat_data_sent = False
-                    st.error("LLM 返回了空响应，请重试。")
+                    st.toast("LLM 返回了空响应，请重试。", icon="❌")
 
             except Exception as e:
                 st.session_state.chat_messages.pop()
                 if data_was_attached:
                     st.session_state.chat_data_sent = False
-                st.error(f"未知错误：{e}")
+                st.toast(f"未知错误：{e}", icon="❌")
 
 st.divider()
 with st.expander("📖 使用说明", expanded=False):

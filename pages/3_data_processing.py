@@ -88,7 +88,7 @@ if df.shape[1] == 0 or len(df) == 0:
         if st.button("保存空数据状态", use_container_width=True, key=_k("btn_save_empty")):
             st.session_state.main_df = df.copy()
             st.session_state._data_cleaned = True
-            st.success("已保存当前空数据状态。")
+            st.toast("已保存当前空数据状态。", icon="✅")
     with c_reset:
         if st.button("重置为原始数据", use_container_width=True, key=_k("btn_reset_empty")):
             if st.session_state.original_df is not None:
@@ -114,9 +114,9 @@ with st.expander("2. 数据类型修改"):
                 df[type_col] = pd.to_datetime(df[type_col], errors="coerce")
             else:
                 df[type_col] = df[type_col].astype(type_choice)
-            st.success("转换成功！")
+            st.toast("转换成功！", icon="✅")
         except Exception:
-            st.error("转换失败（数据不兼容）")
+            st.toast("转换失败（数据不兼容）", icon="❌")
 
 # ═══════════════════════════════════════════════
 # 3. 统计指标计算
@@ -149,7 +149,7 @@ with st.expander("4. 标准化 / 归一化"):
     if st.button("执行缩放", key=_k("btn_scale")) and scale_cols:
         scaler = StandardScaler() if "Standard" in method else MinMaxScaler()
         df[scale_cols] = scaler.fit_transform(df[scale_cols])
-        st.success("处理完成！")
+        st.toast("处理完成！", icon="✅")
 
 # ═══════════════════════════════════════════════
 # 5. 添加数据噪声
@@ -165,7 +165,7 @@ with st.expander("5. 添加数据噪声"):
         if st.button("添加噪声", key=_k("btn_noise")):
             noise = np.random.normal(0, noise_level, size=df[noise_col].shape)
             df[noise_col] = df[noise_col] + noise
-            st.success("噪声添加完成！")
+            st.toast("噪声添加完成！", icon="✅")
 
 # ═══════════════════════════════════════════════
 # 6. 类别特征编码
@@ -187,7 +187,7 @@ with st.expander("6. 类别特征编码"):
                 feature_names = ohe.get_feature_names_out([cat_col])
                 new_df = pd.DataFrame(new_cols, columns=feature_names, index=df.index)
                 df = pd.concat([df.drop(columns=[cat_col]), new_df], axis=1)
-            st.success("编码完成！")
+            st.toast("编码完成！", icon="✅")
 
 # ═══════════════════════════════════════════════
 # 7. 自定义计算列
@@ -198,16 +198,85 @@ with st.expander("7. 自定义计算列"):
     if len(numeric_cols) == 0:
         st.warning("当前无数值列！")
     else:
-        calc_col = st.selectbox("参考列", numeric_cols, key=_k("calc_col"))
-        calc_method = st.selectbox("计算方式", ["平方", "开方", "取对数", "+10", "*3"], key=_k("calc_method"))
-        new_col_name = st.text_input("新列名", value="new_column", key=_k("calc_new_col"))
-        if st.button("生成计算列", key=_k("btn_calc")):
-            if calc_method == "平方": df[new_col_name] = df[calc_col] ** 2
-            elif calc_method == "开方": df[new_col_name] = np.sqrt(df[calc_col])
-            elif calc_method == "取对数": df[new_col_name] = np.log(df[calc_col] + 1e-6)
-            elif calc_method == "+10": df[new_col_name] = df[calc_col] + 10
-            elif calc_method == "*3": df[new_col_name] = df[calc_col] * 3
-            st.success("新列已添加！")
+        calc_mode = st.radio("计算模式", ["简单计算", "自定义表达式"], key=_k("calc_mode"), horizontal=True)
+
+        if calc_mode == "简单计算":
+            op_type = st.radio("运算类型", ["一元运算", "二元运算"], key=_k("op_type"), horizontal=True)
+
+            if op_type == "一元运算":
+                c1, c2 = st.columns(2)
+                with c1:
+                    col_a = st.selectbox("选择列", numeric_cols, key=_k("unary_col"))
+                    unary_op = st.selectbox("运算", ["平方", "开方", "取对数", "绝对值", "四舍五入", "取负"], key=_k("unary_op"))
+                with c2:
+                    if unary_op == "四舍五入":
+                        decimals = st.number_input("小数位数", 0, 10, 2, key=_k("decimals"))
+                    new_col_name = st.text_input("新列名", value="new_column", key=_k("simple_new_col"))
+
+                if st.button("生成计算列", key=_k("btn_simple_calc")):
+                    if unary_op == "平方":
+                        df[new_col_name] = df[col_a] ** 2
+                    elif unary_op == "开方":
+                        df[new_col_name] = np.sqrt(df[col_a].clip(lower=0))
+                    elif unary_op == "取对数":
+                        df[new_col_name] = np.log(df[col_a].clip(lower=0) + 1e-10)
+                    elif unary_op == "绝对值":
+                        df[new_col_name] = df[col_a].abs()
+                    elif unary_op == "四舍五入":
+                        df[new_col_name] = df[col_a].round(decimals)
+                    elif unary_op == "取负":
+                        df[new_col_name] = -df[col_a]
+                    st.toast("新列已添加！", icon="✅")
+
+            else:  # 二元运算
+                c1, c2 = st.columns(2)
+                with c1:
+                    col_a = st.selectbox("第一列", numeric_cols, key=_k("bin_col_a"))
+                    operand_type = st.radio("第二操作数", ["选择列", "常数"], key=_k("operand_type"), horizontal=True)
+                    if operand_type == "选择列":
+                        other_cols = [c for c in numeric_cols if c != col_a]
+                        bin_col_b = st.selectbox("第二列", other_cols if other_cols else numeric_cols, key=_k("bin_col_b"))
+                    else:
+                        const_val = st.number_input("常数值", value=0.0, step=1.0, key=_k("bin_const"))
+                with c2:
+                    bin_op = st.selectbox("运算符", ["+", "−", "×", "÷", "// (整除)", "% (取余)", "^ (幂)"], key=_k("bin_op"))
+                    new_col_name = st.text_input("新列名", value="new_column", key=_k("simple_new_col"))
+
+                if st.button("生成计算列", key=_k("btn_simple_calc")):
+                    b = df[bin_col_b] if operand_type == "选择列" else const_val
+                    op = bin_op
+                    if op == "+":            df[new_col_name] = df[col_a] + b
+                    elif op == "−":          df[new_col_name] = df[col_a] - b
+                    elif op == "×":          df[new_col_name] = df[col_a] * b
+                    elif op == "÷":          df[new_col_name] = df[col_a] / b
+                    elif op == "// (整除)":   df[new_col_name] = df[col_a] // b
+                    elif op == "% (取余)":    df[new_col_name] = df[col_a] % b
+                    elif op == "^ (幂)":     df[new_col_name] = df[col_a] ** b
+                    st.toast("新列已添加！", icon="✅")
+
+        else:  # 自定义表达式
+            st.caption("使用列名作为变量编写表达式，支持 + − × ÷ // % ** 和括号")
+            cols_hint = ", ".join(str(c) for c in numeric_cols)
+            st.caption(f"可用数值列: {cols_hint}")
+            invalid_ids = [c for c in numeric_cols if not str(c).isidentifier()]
+            if invalid_ids:
+                escaped = ", ".join(f"`{c}`" for c in invalid_ids)
+                st.caption(f"含特殊字符的列名需用反引号包裹: {escaped}")
+            c1, c2 = st.columns(2)
+            with c1:
+                expression = st.text_area("表达式", placeholder="例如: (col_A + col_B) / col_C * 100", key=_k("expr"))
+            with c2:
+                new_col_name = st.text_input("新列名", value="new_column", key=_k("expr_new_col"))
+            if st.button("生成计算列", key=_k("btn_expr_calc")):
+                expr = expression.strip()
+                if not expr:
+                    st.warning("请输入表达式")
+                else:
+                    try:
+                        df[new_col_name] = df.eval(expr, engine="python")
+                        st.toast("新列已添加！", icon="✅")
+                    except Exception as e:
+                        st.toast(f"表达式错误: {e}", icon="❌")
 
 # ═══════════════════════════════════════════════
 # 8. PCA 降维
@@ -231,7 +300,7 @@ with st.expander("8. PCA 降维"):
             pca_result = pca.fit_transform(df[pca_cols])
             pca_df = pd.DataFrame(pca_result, columns=[f"PCA_{i+1}" for i in range(n_components)], index=df.index)
             df = pd.concat([df.drop(columns=pca_cols), pca_df], axis=1)
-            st.success(f"降维至 {n_components} 维完成！")
+            st.toast(f"降维至 {n_components} 维完成！", icon="✅")
 
 # ═══════════════════════════════════════════════
 # Preview + Actions
@@ -257,7 +326,7 @@ with ctrl1:
             csv_bytes = df.to_csv(index=False).encode('utf-8')
             ok = try_upload_backend(csv_bytes, "processed_data.csv")
         if ok:
-            st.success("已保存！修改不会因切换页面而丢失。")
+            st.toast("已保存！修改不会因切换页面而丢失。", icon="✅")
         else:
             st.warning("数据已保存到前端，但后端同步失败。ML 训练可能使用旧数据。")
 

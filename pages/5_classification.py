@@ -98,13 +98,13 @@ with train_col:
     if st.button("开始训练 / 重新训练模型", type="primary", use_container_width=True):
         class_counts = df_clean[target_col].value_counts()
         if class_counts.min() < 2:
-            st.error("❌ 训练失败：每个类别至少需要2个样本！")
+            st.toast("❌ 训练失败：每个类别至少需要2个样本！", icon="❌")
             st.stop()
 
         with st.spinner("分类模型训练中（后端 Flask 计算）..."):
             sid = ensure_session(df_clean)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
                 st.stop()
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             result = train_classification(
@@ -121,7 +121,7 @@ with train_col:
                 st.session_state.cls_reverse_label_map = result["reverse_label_map"]
                 st.session_state.cls_version_id = result.get("version_id", "")
 
-                st.success(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                st.toast(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
 
                 cm = result["cm"]
                 label_names = result["label_names"]
@@ -139,7 +139,7 @@ with train_col:
 
                 plot_loss_curve(result["train_losses"], result["val_losses"])
             else:
-                st.error(f"训练失败：{result}")
+                st.toast(f"训练失败：{result}", icon="❌")
 
 with clear_col:
     if st.button("清除已保存分类模型", use_container_width=True):
@@ -170,13 +170,13 @@ else:
         device_str = "cuda" if "CUDA" in str(device) else "cpu"
         err = validate_input_array(np.array([input_data]), "单条预测")
         if err:
-            st.error(err)
+            st.toast(err, icon="❌")
         else:
             result = predict_classification(input_data, device_str)
             if result and "pred_idx" in result:
                 pred_idx = result["pred_idx"]
                 pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
-                st.success(f"🎯 预测类别：{pred_class} | 置信度：{result['prob']:.4f}")
+                st.toast(f"🎯 预测类别：{pred_class} | 置信度：{result['prob']:.4f}", icon="✅")
 
     st.divider()
     st.subheader("📦 批量预测")
@@ -185,12 +185,12 @@ else:
         batch_df = pd.read_csv(batch_file)
         missing_cols = set(features) - set(batch_df.columns)
         if missing_cols:
-            st.error(f"缺少特征列：{missing_cols}")
+            st.toast(f"缺少特征列：{missing_cols}", icon="❌")
         else:
             batch_X = batch_df[features].values
             err = validate_input_array(batch_X, "批量预测")
             if err:
-                st.error(err)
+                st.toast(err, icon="❌")
             else:
                 result = batch_predict_classification(batch_X.tolist(), device_str)
                 if result and "pred_indices" in result:

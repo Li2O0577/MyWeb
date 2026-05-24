@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from pages._prepare import data_uploader, render_sidebar, detect_outliers
+from pages._prepare import data_uploader, render_sidebar
 
 st.set_page_config(page_title="数据加载", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)

@@ -95,7 +95,7 @@ with train_col:
         with st.spinner("训练中（后端 Flask 计算中）..."):
             sid = ensure_session(numeric_df)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
                 st.stop()
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             result = train_regression(
@@ -110,10 +110,10 @@ with train_col:
                 st.session_state.reg_target = target_col
                 st.session_state.reg_version_id = result.get("version_id", "")
 
-                st.success(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...")
+                st.toast(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
                 plot_loss_curve(result["train_losses"], result["val_losses"], y_label="损失值 (MSE)")
             else:
-                st.error(f"训练失败：{result}")
+                st.toast(f"训练失败：{result}", icon="❌")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
@@ -141,11 +141,11 @@ else:
         device_str = "cuda" if "CUDA" in str(device) else "cpu"
         err = validate_input_array(np.array([input_data]), "单条预测")
         if err:
-            st.error(err)
+            st.toast(err)
         else:
             result = predict_regression(input_data, device_str)
             if result and "result" in result:
-                st.success(f"预测结果：{result['result']:.4f}")
+                st.toast(f"预测结果：{result['result']:.4f}", icon="✅")
 
     st.divider()
     st.subheader("📦 批量预测")
@@ -154,12 +154,12 @@ else:
         batch_df = pd.read_csv(batch_file)
         missing_cols = set(features) - set(batch_df.columns)
         if missing_cols:
-            st.error(f"缺少特征列：{missing_cols}")
+            st.toast(f"缺少特征列：{missing_cols}", icon="❌")
         else:
             batch_X = batch_df[features].values
             err = validate_input_array(batch_X, "批量预测")
             if err:
-                st.error(err)
+                st.toast(err, icon="❌")
             else:
                 result = batch_predict_regression(batch_X.tolist(), device_str)
                 if result and "predictions" in result:

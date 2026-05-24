@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._api import upload_data, try_upload_backend
+from backend.services.data_service import detect_outliers
 
 
 def hide_native_sidebar():
@@ -13,30 +14,6 @@ def hide_native_sidebar():
             [data-testid="stSidebarNav"] {display: none;}
         </style>
     """, unsafe_allow_html=True)
-
-
-def detect_outliers(df):
-    """IQR-based outlier detection (local helper for UI display)."""
-    outliers = {}
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    for col in numeric_cols:
-        q1 = df[col].quantile(0.25)
-        q3 = df[col].quantile(0.75)
-        iqr = q3 - q1
-        if iqr == 0:
-            continue
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        mask = (df[col] < lower) | (df[col] > upper)
-        if mask.any():
-            outliers[col] = {
-                "count": int(mask.sum()),
-                "indices": df.index[mask].tolist(),
-                "values": df.loc[mask, col].tolist(),
-                "lower_bound": round(lower, 4),
-                "upper_bound": round(upper, 4),
-            }
-    return outliers
 
 
 def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True):
@@ -89,7 +66,7 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                 st.session_state.outliers = outlier_info
                 st.session_state['main_df'] = df
                 st.session_state._data_loaded = True
-                st.success(f"成功加载: {uploaded_file.name}")
+                st.toast(f"成功加载: {uploaded_file.name}", icon="✅")
 
                 # 3. Try Flask backend upload — non-blocking, fails fast (2s connect timeout)
                 if upload_to_backend and "session_id" not in st.session_state:
@@ -106,7 +83,7 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                 return df
 
             except Exception as e:
-                st.error(f"错误：{e}")
+                st.toast(f"错误：{e}", icon="❌")
                 return None
 
         if 'main_df' in st.session_state:

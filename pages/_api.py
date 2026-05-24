@@ -113,10 +113,10 @@ def render_backend_sync_panel(df, compact=False):
         with st.spinner("正在同步当前数据到 Flask 后端..."):
             new_sid = ensure_session(df)
         if new_sid:
-            st.success(f"同步完成，session: `{new_sid}`")
+            st.toast(f"同步完成，session: `{new_sid}`", icon="✅")
             st.rerun()
         else:
-            st.error("同步失败。请确认 Flask 后端正在运行。")
+            st.toast("同步失败。请确认 Flask 后端正在运行。", icon="❌")
     return False
 
 
@@ -138,25 +138,25 @@ def _post(path, json_data=None, files=None, timeout=300):
                 err = _format_error_payload(resp.json(), f"HTTP {resp.status_code}")
             except Exception:
                 err = f"HTTP {resp.status_code} (非 JSON 响应)"
-            st.error(f"API 错误 [{path}]: {err}")
+            st.toast(f"API 错误 [{path}]: {err}", icon="❌")
             return None
         try:
             return resp.json()
         except Exception:
-            st.error(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})")
+            st.toast(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})", icon="❌")
             return None
     except requests.exceptions.ConnectionError:
         ok, info = _backend_ok()
         if ok:
-            st.error(f"Flask 后端连接异常（健康检查通过但 {path} 被拒绝）。请重启后端。")
+            st.toast(f"Flask 后端连接异常（健康检查通过但 {path} 被拒绝）。请重启后端。", icon="❌")
         else:
-            st.error("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。")
+            st.toast("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。", icon="❌")
         return None
     except requests.exceptions.Timeout:
-        st.error(f"请求超时 ({path})。请检查后端是否正常运行。")
+        st.toast(f"请求超时 ({path})。请检查后端是否正常运行。", icon="❌")
         return None
     except requests.exceptions.RequestException as e:
-        st.error(f"网络错误 ({path}): {e}")
+        st.toast(f"网络错误 ({path}): {e}", icon="❌")
         return None
 
 
@@ -184,21 +184,21 @@ def _delete(path, timeout=30):
                 err = _format_error_payload(resp.json(), f"HTTP {resp.status_code}")
             except Exception:
                 err = f"HTTP {resp.status_code} (非 JSON 响应)"
-            st.error(f"API 错误 [{path}]: {err}")
+            st.toast(f"API 错误 [{path}]: {err}", icon="❌")
             return None
         try:
             return resp.json()
         except Exception:
-            st.error(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})")
+            st.toast(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})", icon="❌")
             return None
     except requests.exceptions.ConnectionError:
-        st.error("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。")
+        st.toast("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。", icon="❌")
         return None
     except requests.exceptions.Timeout:
-        st.error(f"请求超时 ({path})。请检查后端是否正常运行。")
+        st.toast(f"请求超时 ({path})。请检查后端是否正常运行。", icon="❌")
         return None
     except requests.exceptions.RequestException as e:
-        st.error(f"网络错误 ({path}): {e}")
+        st.toast(f"网络错误 ({path}): {e}", icon="❌")
         return None
 
 

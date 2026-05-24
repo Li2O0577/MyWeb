@@ -53,7 +53,7 @@ Write-Host ""
 Write-Host "[2/5] 安装前端依赖 (Streamlit)..." -ForegroundColor Yellow
 Write-Host "    streamlit, pandas, numpy, scikit-learn, plotly, requests, openpyxl"
 
-$frontendPkgs = @("streamlit", "pandas", "numpy", "scikit-learn", "plotly", "requests", "openpyxl")
+$frontendPkgs = @("streamlit>=1.35", "pandas", "numpy", "scikit-learn", "plotly", "requests", "openpyxl")
 foreach ($pkg in $frontendPkgs) {
     Write-Host "    → $pkg" -NoNewline
     & $pythonCmd -m pip install -q $pkg 2>&1 | Out-Null

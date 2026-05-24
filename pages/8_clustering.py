@@ -87,7 +87,7 @@ if is_kmeans:
         with st.spinner("正在计算..."):
             sid = ensure_session(numeric_df)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
             else:
                 result = elbow_clustering(sid, [str(c) for c in feature_cols], max_k_elbow)
                 if result:
@@ -119,7 +119,7 @@ with train_col:
         with st.spinner("聚类训练中（后端 Flask 计算）..."):
             sid = ensure_session(numeric_df)
             if not sid:
-                st.error("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。")
+                st.toast("无法连接到 Flask 后端 (http://localhost:5001)。请确保后端已启动。", icon="❌")
                 st.stop()
             algo = "kmeans" if is_kmeans else "dbscan"
             params = {"n_clusters": n_clusters} if is_kmeans else {"eps": eps, "min_samples": min_samples}
@@ -136,15 +136,15 @@ with train_col:
                         if result.get("silhouette"):
                             msg += f" | 轮廓系数: {result['silhouette']:.4f}"
                             msg += f" | Inertia: {result['inertia']:,.2f}"
-                        st.success(msg)
+                        st.toast(msg, icon="✅")
                     else:
                         noise = sum(1 for l in result["labels"] if l == -1)
                         msg = f"✅ 聚类完成！发现 {result['n_found']} 个簇 + {noise} 个噪声点"
                         if result.get("silhouette"):
                             msg += f" | 轮廓系数: {result['silhouette']:.4f}"
-                        st.success(msg)
+                        st.toast(msg, icon="✅")
                 else:
-                    st.error(resp["error"])
+                    st.toast(resp["error"], icon="❌")
 
 with clear_col:
     if st.button("清除已保存聚类模型", use_container_width=True):
@@ -213,4 +213,4 @@ else:
     if st.button("执行聚类预测", use_container_width=True):
         result = predict_clustering(input_data)
         if result and "cluster" in result:
-            st.success(f"🎯 预测结果：该数据属于 **簇 {result['cluster']}**")
+            st.toast(f"🎯 预测结果：该数据属于 **簇 {result['cluster']}**", icon="✅")
