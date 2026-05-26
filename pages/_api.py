@@ -500,3 +500,15 @@ def chat_llm(api_base, api_key, model, messages):
         timeout=(CONNECT_TIMEOUT, 180),
         stream=True
     )
+
+
+def agent_chat_llm(session_id, api_base, api_key, model, messages):
+    """Agent mode — SSE streaming with tool calling.
+    session_id is required so the backend can access the DataFrame."""
+    return requests.post(
+        f"{API_BASE}/llm/agent",
+        json={"session_id": session_id, "api_base": api_base,
+              "api_key": api_key, "model": model, "messages": messages},
+        timeout=(CONNECT_TIMEOUT, 600),
+        stream=True
+    )

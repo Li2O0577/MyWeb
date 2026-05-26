@@ -103,7 +103,7 @@ streamlit run main.py
 3. 在「数据可视化」页面探索数据
 4. 在「数据处理」页面清洗和转换
 5. 在 ML 页面（回归/分类/DIY MLP/决策树/聚类）训练模型并预测
-6. 在「大模型分析」页面让 AI 推荐分析方向
+6. 在「大模型分析」页面与 AI 对话：Smart 模式推荐方向、Direct 模式深入分析、Agent 模式让 AI 自主执行训练和推理
 
 ## 项目结构
 
@@ -147,7 +147,8 @@ MyWeb1/
 │   │   ├── diy_mlp_service.py
 │   │   ├── decision_tree_service.py
 │   │   ├── clustering_service.py
-│   │   └── llm_service.py
+│   │   ├── llm_service.py
+│   │   └── training_validation.py  # 训练前友好校验
 │   ├── models/                    # 模型版本存储 + 注册表
 │   │   ├── registry.py            # 版本注册表管理器
 │   │   └── {type}/{version_id}/   # 各版本目录（.gitignore 排除）
@@ -185,6 +186,7 @@ MyWeb1/
 | `/api/decision_tree/*` | POST | 同上模式 |
 | `/api/clustering/*` | POST | 同上模式 + `/elbow` |
 | `/api/llm/chat` | POST | SSE 流式聊天 |
+| `/api/llm/agent` | POST | SSE Agent 模式（function calling 自主执行分析） |
 | `/api/{type}/versions` | GET | 列出该类型所有模型版本 |
 | `/api/{type}/version/<vid>` | GET | 获取版本详情 |
 | `/api/{type}/activate` | POST | 切换激活版本 |
@@ -215,15 +217,19 @@ MyWeb1/
 - **聚类**：K-means + DBSCAN，肘部法则，轮廓系数，PCA 可视化
 
 ### 大模型分析 (Page 9)
-- Smart 模式：发送数据摘要（自动截断至 8000 字符），AI 推荐分析方向
-- Direct 模式：发送原始数据，AI 自定义分析
+- **Smart 模式**：发送数据摘要（自动截断至 8000 字符），AI 推荐分析方向
+- **Direct 模式**：发送原始数据，AI 自定义分析
+- **Agent 模式**：AI 通过 function calling 自主调用平台工具
+  - 支持 6 种工具：数据概览、列详情、回归训练、分类训练、聚类分析、相关性分析
+  - AI 自动选择工具、执行分析、解读指标，实时展示调用进度
+  - 最多 10 轮迭代，需要支持 function calling 的模型
 - SSE 流式响应，聊天界面
-- API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ 环境密钥支持
+- API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ `LLM_API_KEY` 环境密钥支持
 
 ## 安全设计
 
 - **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启
-- **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；支持从环境变量读取密钥
+- **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；Agent 模式下工具执行均在服务端完成，LLM 不直接访问数据文件
 - **文件上传**：256MB 硬限制，防止内存耗尽
 - **Session 存储**：Parquet + JSON 替代 pickle，消除反序列化代码执行风险
 - **模型加载**：sklearn Pipeline / KMeans 加载时进行类型验证
