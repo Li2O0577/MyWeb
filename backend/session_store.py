@@ -3,6 +3,7 @@
 Replaced pickle with Parquet/JSON to eliminate deserialization code-execution risk.
 Old .pkl sessions are migrated on first access or discarded if expired.
 """
+import logging
 import os
 import json
 import shutil
@@ -12,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -58,13 +61,14 @@ def _save_to_disk(sid, record):
     meta = record.get("meta", {})
     try:
         df.to_parquet(_parquet_path(sid), index=False)
-    except Exception:
+    except Exception as e:
+        _log.warning("Failed to write session parquet %s: %s", sid, e)
         return
     try:
         with open(_meta_path(sid), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False)
-    except Exception:
-        # If meta write fails, clean up the parquet so we don't have orphan data
+    except Exception as e:
+        _log.warning("Failed to write session meta %s: %s", sid, e)
         try:
             os.remove(_parquet_path(sid))
         except Exception:

@@ -47,16 +47,17 @@ render_backend_sync_panel(df_clean)
 # Version selector
 active_vid = render_version_selector("分类", list_classification_versions, activate_classification_version, delete_classification_version)
 
-# Auto-detect saved model
-if "cls_result" not in st.session_state:
-    status = classification_status()
+# Auto-detect saved model — reloads when active version changes
+status = classification_status()
+current_vid = status.get("version_id", "") if status else ""
+if "cls_result" not in st.session_state or st.session_state.get("cls_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.cls_result = {"acc": 0, "cm": [], "label_names": [], "train_losses": [], "val_losses": [], "restored": True}
         st.session_state.cls_features = status.get("features", [])
         st.session_state.cls_target = status.get("target", "")
         st.session_state.cls_n_classes = status.get("params", {}).get("n_classes", 2)
         st.session_state.cls_reverse_label_map = {}
-        st.session_state.cls_version_id = status.get("version_id", "")
+        st.session_state.cls_version_id = current_vid
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载分类模型版本（{ds} | {created} | 目标列：{st.session_state.cls_target}）")

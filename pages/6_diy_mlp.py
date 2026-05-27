@@ -79,9 +79,10 @@ check_constant_features(numeric_df, feature_cols)
 # Version selector
 active_vid = render_version_selector("DIY MLP", list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version)
 
-# Auto-detect saved model
-if "diy_result" not in st.session_state:
-    status = diy_mlp_status()
+# Auto-detect saved model — reloads when active version changes
+status = diy_mlp_status()
+current_vid = status.get("version_id", "") if status else ""
+if "diy_result" not in st.session_state or st.session_state.get("diy_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.diy_result = {"train_losses": [], "val_losses": []}
         st.session_state.diy_features = status.get("features", [])
@@ -91,7 +92,7 @@ if "diy_result" not in st.session_state:
         if saved_task == "classification":
             st.session_state.diy_n_classes = status.get("params", {}).get("n_classes", 2)
             st.session_state.diy_reverse_label_map = {}
-        st.session_state.diy_version_id = status.get("version_id", "")
+        st.session_state.diy_version_id = current_vid
         # Restore layers from saved config
         saved_layers = status.get("params", {}).get("layers", [])
         if saved_layers and "diy_layers" not in st.session_state:

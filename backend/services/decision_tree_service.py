@@ -77,6 +77,7 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
     config_dict = {
         "features": feature_cols,
         "target": target_col,
+        "categorical_features": cat_cols,
         "criterion": criterion,
         "max_depth": max_depth,
         "task_type": task_type
@@ -97,6 +98,7 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
         "session_id": session_id,
         "features": feature_cols,
         "target": target_col,
+        "categorical_features": cat_cols,
         "metrics": metrics,
         "params": {"criterion": criterion, "max_depth": max_depth, "task_type": task_type},
     }, {"model": "model.pkl", "config": "config.json"})

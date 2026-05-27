@@ -39,9 +39,10 @@ render_backend_sync_panel(numeric_df)
 # Version selector
 active_vid = render_version_selector("回归", list_regression_versions, activate_regression_version, delete_regression_version)
 
-# Auto-detect saved model
-if "reg_result" not in st.session_state:
-    status = regression_status()
+# Auto-detect saved model — reloads when active version changes
+status = regression_status()
+current_vid = status.get("version_id", "") if status else ""
+if "reg_result" not in st.session_state or st.session_state.get("reg_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.reg_result = {
             "r2": status.get("metrics", {}).get("r2", 0),
@@ -51,7 +52,7 @@ if "reg_result" not in st.session_state:
         }
         st.session_state.reg_features = status.get("features", [])
         st.session_state.reg_target = status.get("target", "")
-        st.session_state.reg_version_id = status.get("version_id", "")
+        st.session_state.reg_version_id = current_vid
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载模型版本（{ds} | {created} | 目标列：{st.session_state.reg_target}）")

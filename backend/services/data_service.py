@@ -8,8 +8,10 @@ def parse_file(file_bytes, filename):
     """Parse uploaded CSV/Excel into a DataFrame."""
     if filename.endswith('.csv'):
         return pd.read_csv(io.BytesIO(file_bytes))
-    else:
+    elif filename.endswith(('.xlsx', '.xls')):
         return pd.read_excel(io.BytesIO(file_bytes))
+    else:
+        raise ValueError(f"不支持的文件格式: {filename}。请上传 CSV (.csv) 或 Excel (.xlsx) 文件。")
 
 
 def detect_outliers(df):
@@ -129,4 +131,18 @@ def serialize_preview(df, rows=100):
     for col in preview.columns:
         if preview[col].dtype == 'object':
             preview[col] = preview[col].apply(lambda x: str(x) if not isinstance(x, (str, int, float, bool, type(None), list, dict)) else x)
-    return preview.to_dict(orient="records")
+    records = preview.to_dict(orient="records")
+
+    # Ensure all values are JSON-serializable (numpy scalars survive to_dict)
+    for row in records:
+        for k, v in row.items():
+            if isinstance(v, (np.integer,)):
+                row[k] = int(v)
+            elif isinstance(v, (np.floating,)):
+                row[k] = float(v)
+            elif isinstance(v, (np.bool_,)):
+                row[k] = bool(v)
+            elif isinstance(v, np.ndarray):
+                row[k] = v.tolist()
+
+    return records

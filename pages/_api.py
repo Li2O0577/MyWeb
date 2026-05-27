@@ -165,10 +165,13 @@ def _get(path, timeout=30):
     try:
         resp = requests.get(f"{API_BASE}{path}", timeout=(CONNECT_TIMEOUT, timeout))
         if resp.status_code != 200:
+            if resp.status_code >= 500:
+                st.toast(f"后端服务器错误 ({path}): HTTP {resp.status_code}", icon="❌")
             return None
         try:
             return resp.json()
         except Exception:
+            st.toast(f"后端返回了无效的 JSON 响应 ({path})", icon="❌")
             return None
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
             requests.exceptions.RequestException):

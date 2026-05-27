@@ -88,15 +88,17 @@ is_cls = (st.session_state.dt_task_type == "classification")
 # Version selector
 active_vid = render_version_selector("决策树", list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version)
 
-# Auto-detect saved model
-if "dt_result" not in st.session_state:
-    status = decision_tree_status()
+# Auto-detect saved model — reloads when active version changes
+status = decision_tree_status()
+current_vid = status.get("version_id", "") if status else ""
+if "dt_result" not in st.session_state or st.session_state.get("dt_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.dt_result = {}
         st.session_state.dt_features = status.get("features", [])
+        st.session_state.dt_categorical_features = status.get("categorical_features", [])
         st.session_state.dt_target = status.get("target", "")
         st.session_state.dt_task_saved = status.get("params", {}).get("task_type", "classification")
-        st.session_state.dt_version_id = status.get("version_id", "")
+        st.session_state.dt_version_id = current_vid
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载决策树模型版本（{ds} | {created} | 目标列：{st.session_state.dt_target}）")
@@ -170,11 +172,12 @@ else:
     st.info(f"✅ 模型已训练 | 任务类型：{'分类' if predict_is_cls else '回归'}")
 
     st.write("请输入特征值进行预测：")
+    model_cat_cols = st.session_state.get("dt_categorical_features", categorical_cols)
     input_data = {}
     cols = st.columns(min(len(features), 5))
     for i, col in enumerate(cols):
         feat = features[i]
-        if feat in categorical_cols:
+        if feat in model_cat_cols:
             options = df_clean[feat].unique().tolist()
             val = col.selectbox(f"{feat}", options, key=f"dt_{i}")
         else:
@@ -187,7 +190,7 @@ else:
                 idx = row_start + j
                 if idx < len(features):
                     feat = features[idx]
-                    if feat in categorical_cols:
+                    if feat in model_cat_cols:
                         options = df_clean[feat].unique().tolist()
                         val = col.selectbox(f"{feat}", options, key=f"dt_{idx}")
                     else:

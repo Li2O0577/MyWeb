@@ -28,6 +28,7 @@ def setup_version_routes(bp, model_type):
         return jsonify({
             "has_model": True, "version_id": vid,
             "features": meta.get("features", []),
+            "categorical_features": meta.get("categorical_features", []),
             "target": meta.get("target", ""),
             "metrics": meta.get("metrics", {}),
             "params": meta.get("params", {}),

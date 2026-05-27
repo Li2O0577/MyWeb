@@ -44,16 +44,17 @@ if "cluster_algorithm" not in st.session_state:
 # Version selector
 active_vid = render_version_selector("聚类", list_clustering_versions, activate_clustering_version, delete_clustering_version)
 
-# Auto-detect saved model
-if "cluster_result" not in st.session_state:
-    status = clustering_status()
+# Auto-detect saved model — reloads when active version changes
+status = clustering_status()
+current_vid = status.get("version_id", "") if status else ""
+if "cluster_result" not in st.session_state or st.session_state.get("cluster_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.cluster_result = {}
         st.session_state.cluster_features = status.get("features", [])
         algo = status.get("params", {}).get("algorithm", "kmeans")
         if algo == "dbscan":
             st.session_state.cluster_algorithm = "dbscan"
-        st.session_state.cluster_version_id = status.get("version_id", "")
+        st.session_state.cluster_version_id = current_vid
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载聚类模型版本（{ds} | {created} | {algo}）")

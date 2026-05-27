@@ -106,18 +106,26 @@ def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
 
 
 def elbow(df, feature_cols, max_k):
-    """Compute inertia for K values 1..max_k."""
+    """Compute inertia for K values 1..max_k. Capped at n_samples-1."""
     X = df[feature_cols].values
+    n = len(X)
+    max_valid = min(max_k, n - 1)
+    if max_valid < 2:
+        return {"ks": [], "inertias": [], "warning": "数据量不足以计算肘部法则（至少需要 3 行数据）"}
+    capped = max_valid < max_k
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    ks = list(range(1, max_k + 1))
+    ks = list(range(1, max_valid + 1))
     inertias = []
     for k in ks:
         km = KMeans(n_clusters=k, random_state=42, n_init='auto')
         km.fit(X_scaled)
         inertias.append(float(km.inertia_))
-    return {"ks": ks, "inertias": inertias}
+    result = {"ks": ks, "inertias": inertias}
+    if capped:
+        result["warning"] = f"max_k 已从 {max_k} 调整为 {max_valid}（不能超过样本数）"
+    return result
 
 
 def _safe_load_pickle(path, expected_type):

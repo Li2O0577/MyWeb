@@ -68,7 +68,17 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 - `backend/requirements.txt` — 后端依赖（Flask + PyTorch + sklearn）
 - `setup.ps1` — 一键安装脚本，自动检测 GPU
 
-### 2. 启动
+### 2. 一键启动
+
+```bash
+# Windows: 双击 start.bat
+# 或手动:
+powershell -ExecutionPolicy Bypass -File start.ps1
+```
+
+脚本自动检测 Python 解释器（标准 Python / Conda / uv），用户选择后自动在两个终端窗口启动 Flask 后端（:5001）和 Streamlit 前端（:8501）。
+
+### 3. 手动启动
 
 打开两个终端，均需先激活 Python 环境：
 
@@ -96,7 +106,19 @@ streamlit run main.py
 | `INDETERMINATE_API_BASE` | `http://127.0.0.1:5001/api` | 前端 API 地址 |
 | `LLM_API_KEY` | 无 | LLM 默认 API 密钥，设置后前端无需手动填写 |
 
-### 3. 使用
+### 4. 清理缓存
+
+```bash
+# Windows: 双击 clean.bat
+# 或手动:
+powershell -ExecutionPolicy Bypass -File clean.ps1          # 交互模式
+powershell -ExecutionPolicy Bypass -File clean.ps1 -WhatIf  # 预览模式（不实际删除）
+powershell -ExecutionPolicy Bypass -File clean.ps1 -Force   # 跳过确认直接删除
+```
+
+清理范围：`__pycache__` 目录、模型文件（.pth/.pkl 等）、模型版本目录、session 数据、日志、临时文件。**保留** `registry.json` 和代码文件。
+
+### 5. 使用
 
 1. 打开 `http://localhost:8501`
 2. 在「数据加载」页面上传 CSV/Excel
@@ -111,7 +133,9 @@ streamlit run main.py
 MyWeb1/
 ├── main.py                      # Streamlit 首页
 ├── requirements.txt             # 前端依赖
-├── setup.bat / setup.ps1        # 一键环境配置
+├── setup.bat / setup.ps1        # 一键环境配置（自动检测 GPU 安装 PyTorch）
+├── start.bat / start.ps1        # 一键启动（自动检测 Python/Conda/uv 并启动前后端）
+├── clean.bat / clean.ps1        # 清理缓存（__pycache__、模型文件、session 数据、日志等）
 ├── pages/                       # Streamlit 页面
 │   ├── _api.py                  # Flask API 客户端（所有后端调用集中管理）
 │   ├── _prepare.py              # 公共组件（数据上传、侧边栏导航，detect_outliers 从 backend 导入）

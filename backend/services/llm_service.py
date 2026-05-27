@@ -293,7 +293,7 @@ def _build_system_prompt(df):
 - 用中文回复，输出清晰有层次的 Markdown 分析报告"""
 
 
-def _execute_tool(tool_name, args, df):
+def _execute_tool(tool_name, args, df, session_id=""):
     """Execute a tool call and return the result string. All exceptions are caught."""
     import io
     import traceback
@@ -356,7 +356,7 @@ def _execute_tool(tool_name, args, df):
                 learning_rate=lr, epochs=epochs, batch_size=32,
                 device_str="cpu",
                 dataset_name=getattr(df, 'attrs', {}).get('source_name', '') or "",
-                session_id=""
+                session_id=session_id
             )
             if err:
                 return f"回归训练失败: {err}"
@@ -400,7 +400,7 @@ def _execute_tool(tool_name, args, df):
                 dropout_rate=0.2,
                 learning_rate=lr, epochs=epochs, batch_size=32,
                 device_str="cpu",
-                dataset_name="", session_id=""
+                dataset_name="", session_id=session_id
             )
             if err:
                 return f"分类训练失败: {err}"
@@ -437,7 +437,7 @@ def _execute_tool(tool_name, args, df):
                 except Exception:
                     elbow_result = None
 
-                result, err = clustering_train(df, numeric_cols, "kmeans", params, "", "")
+                result, err = clustering_train(df, numeric_cols, "kmeans", params, "", session_id)
                 if err:
                     return f"聚类失败: {err}"
 
@@ -456,7 +456,7 @@ def _execute_tool(tool_name, args, df):
                 eps = args.get("eps", 0.5)
                 min_samples = args.get("min_samples", 5)
                 params = {"eps": eps, "min_samples": min_samples}
-                result, err = clustering_train(df, numeric_cols, "dbscan", params, "", "")
+                result, err = clustering_train(df, numeric_cols, "dbscan", params, "", session_id)
                 if err:
                     return f"DBSCAN 聚类失败: {err}"
 
@@ -601,7 +601,7 @@ def agent_chat(api_base, api_key, model, messages, session_id):
 
                 yield {"status": "tool_call", "tool": tool_name, "args": tool_args}
 
-                result_str = _execute_tool(tool_name, tool_args, df)
+                result_str = _execute_tool(tool_name, tool_args, df, session_id)
                 # Truncate very long results
                 if len(result_str) > 6000:
                     result_str = result_str[:6000] + "\n... (结果已截断)"

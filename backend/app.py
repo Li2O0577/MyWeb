@@ -12,6 +12,10 @@ CORS(app)
 
 restore_sessions()
 
+# Clean up registry entries whose model files have been manually deleted
+from models.registry import cleanup_orphaned_versions
+cleanup_orphaned_versions()
+
 
 # ── Periodic cleanup ──
 def _schedule_cleanup(interval=300):
@@ -49,21 +53,30 @@ app.register_blueprint(llm_bp, url_prefix="/api/llm")
 
 @app.route("/api/health")
 def health():
-    n_sessions = active_session_count()
-    from models.registry import get_active_version, get_registry
-    reg = get_registry()
-    model_files = {}
-    for mt in ["regression", "classification", "diy_mlp", "decision_tree", "clustering"]:
-        active = reg.get(mt, {}).get("active")
-        n_versions = len(reg.get(mt, {}).get("versions", {}))
-        model_files[mt] = active is not None
-        model_files[f"{mt}_versions"] = n_versions
-    return {
-        "status": "ok",
-        "active_sessions": n_sessions,
-        "recent_sessions": recent_sessions(),
-        "saved_models": model_files,
-    }
+    try:
+        n_sessions = active_session_count()
+        from models.registry import get_active_version, get_registry
+        reg = get_registry()
+        model_files = {}
+        for mt in ["regression", "classification", "diy_mlp", "decision_tree", "clustering"]:
+            active = reg.get(mt, {}).get("active")
+            n_versions = len(reg.get(mt, {}).get("versions", {}))
+            model_files[mt] = active is not None
+            model_files[f"{mt}_versions"] = n_versions
+        return {
+            "status": "ok",
+            "active_sessions": n_sessions,
+            "recent_sessions": recent_sessions(),
+            "saved_models": model_files,
+        }
+    except Exception as e:
+        return {
+            "status": "degraded",
+            "error": str(e),
+            "active_sessions": 0,
+            "recent_sessions": [],
+            "saved_models": {},
+        }
 
 
 @app.errorhandler(404)

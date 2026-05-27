@@ -69,17 +69,17 @@ def register_version(model_type, version_id, metadata, files):
     metadata: dict with created_at, dataset_name, session_id, features, target, metrics, params
     files: dict like {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"}
     """
-    reg = _read_registry()
-    reg.setdefault(model_type, {"versions": {}, "active": None})
-
-    entry = dict(metadata)
-    entry.setdefault("created_at", _now_iso())
-    entry["files"] = files
-
-    reg[model_type]["versions"][version_id] = entry
-    reg[model_type]["active"] = version_id
-
     with _lock:
+        reg = _read_registry()
+        reg.setdefault(model_type, {"versions": {}, "active": None})
+
+        entry = dict(metadata)
+        entry.setdefault("created_at", _now_iso())
+        entry["files"] = files
+
+        reg[model_type]["versions"][version_id] = entry
+        reg[model_type]["active"] = version_id
+
         _write_registry(reg)
 
     return version_id
@@ -100,23 +100,23 @@ def activate_version(model_type, version_id):
 def delete_version(model_type, version_id):
     """Delete a version from registry and disk."""
     import shutil
-    reg = _read_registry()
-    versions = reg.get(model_type, {}).get("versions", {})
-    if version_id not in versions:
-        return False
-
-    vdir = _version_dir(model_type, version_id)
-    if os.path.exists(vdir):
-        shutil.rmtree(vdir)
-
-    del versions[version_id]
-
-    # If we deleted the active version, pick the newest remaining
-    if reg[model_type]["active"] == version_id:
-        remaining = list(versions.keys())
-        reg[model_type]["active"] = remaining[-1] if remaining else None
-
     with _lock:
+        reg = _read_registry()
+        versions = reg.get(model_type, {}).get("versions", {})
+        if version_id not in versions:
+            return False
+
+        vdir = _version_dir(model_type, version_id)
+        if os.path.exists(vdir):
+            shutil.rmtree(vdir)
+
+        del versions[version_id]
+
+        # If we deleted the active version, pick the newest remaining
+        if reg[model_type]["active"] == version_id:
+            remaining = list(versions.keys())
+            reg[model_type]["active"] = remaining[-1] if remaining else None
+
         _write_registry(reg)
     return True
 
@@ -233,3 +233,45 @@ def get_model_paths(model_type, version_id=None):
             paths[role] = p
 
     return paths, meta
+
+
+def cleanup_orphaned_versions():
+    """Remove registry entries whose model file no longer exists on disk.
+
+    Called once at startup so stale entries from manual file deletion are
+    purged before any API request sees them.
+    """
+    reg = _read_registry()
+    if not reg:
+        return
+    changed = False
+
+    for model_type in MODEL_TYPES:
+        versions = reg.get(model_type, {}).get("versions", {})
+        if not versions:
+            continue
+        orphaned = []
+        for vid, meta in list(versions.items()):
+            vdir = _version_dir(model_type, vid)
+            files = meta.get("files", {})
+            model_file = files.get("model", "")
+            model_path = os.path.join(vdir, model_file) if model_file else ""
+            if not model_path or not os.path.exists(model_path):
+                orphaned.append(vid)
+                # Remove leftover directory if present
+                if os.path.exists(vdir):
+                    import shutil
+                    shutil.rmtree(vdir, ignore_errors=True)
+
+        for vid in orphaned:
+            del versions[vid]
+            changed = True
+
+        # If the active version was orphaned, pick the newest remaining
+        if reg[model_type].get("active") in orphaned:
+            remaining = list(versions.keys())
+            reg[model_type]["active"] = remaining[-1] if remaining else None
+
+    if changed:
+        with _lock:
+            _write_registry(reg)
