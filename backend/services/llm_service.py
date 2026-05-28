@@ -26,6 +26,56 @@ _ALLOWED_HOSTS = [
 ]
 
 _MAX_MESSAGE_LENGTH = 32000  # max chars per message to avoid abuse
+_MAX_AGENT_MESSAGES = 30
+_MAX_AGENT_TOOL_CALLS = 12
+_MAX_TOOL_RESULT_CHARS = 6000
+
+
+def _validate_model_name(model):
+    if not isinstance(model, str) or not model.strip():
+        return False, "模型名称不能为空"
+    if len(model) > 128:
+        return False, "模型名称过长，请检查配置。"
+    return True, None
+
+
+def _validate_messages(messages):
+    if not isinstance(messages, list) or len(messages) == 0:
+        return False, "messages 不能为空"
+    if len(messages) > _MAX_AGENT_MESSAGES:
+        return False, f"对话轮数过多，请清空对话或缩短上下文（最多 {_MAX_AGENT_MESSAGES} 条消息）。"
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            return False, f"messages[{i}] 格式无效"
+        role = msg.get("role")
+        if role not in {"system", "user", "assistant", "tool"}:
+            return False, f"messages[{i}] 的 role 无效"
+        content = msg.get("content", "")
+        if not isinstance(content, str):
+            return False, f"messages[{i}] 内容必须是文本"
+        if len(content) > _MAX_MESSAGE_LENGTH:
+            return False, f"messages[{i}] 内容过长，上限 {_MAX_MESSAGE_LENGTH} 字符"
+    return True, None
+
+
+def _trim_messages(messages):
+    return messages[-_MAX_AGENT_MESSAGES:] if len(messages) > _MAX_AGENT_MESSAGES else messages
+
+
+def _safe_int(value, default, lower, upper):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, lower), upper)
+
+
+def _safe_float(value, default, lower, upper):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, lower), upper)
 
 
 def _validate_api_base(api_base):
@@ -69,18 +119,25 @@ def stream_chat(api_base, api_key, model, messages, temperature=0.7, timeout=180
         yield None, "未提供 API Key。请在设置中填写，或设置环境变量 LLM_API_KEY。"
         return
 
-    # 验证 messages 结构
-    if not isinstance(messages, list) or len(messages) == 0:
-        yield None, "messages 不能为空"
+    ok, msg_err = _validate_messages(messages)
+    if not ok:
+        yield None, msg_err
         return
-    for i, msg in enumerate(messages):
-        if not isinstance(msg, dict):
-            yield None, f"messages[{i}] 格式无效"
-            return
-        content = msg.get("content", "")
-        if isinstance(content, str) and len(content) > _MAX_MESSAGE_LENGTH:
-            yield None, f"messages[{i}] 内容过长，上限 {_MAX_MESSAGE_LENGTH} 字符"
-            return
+    ok, model_err = _validate_model_name(model)
+    if not ok:
+        yield None, model_err
+        return
+    messages = _trim_messages(messages)
+    try:
+        temperature = float(temperature)
+    except (TypeError, ValueError):
+        temperature = 0.7
+    temperature = min(max(temperature, 0.0), 2.0)
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        timeout = 180
+    timeout = min(max(timeout, 30), 240)
 
     try:
         resp = requests.post(
@@ -103,7 +160,7 @@ def stream_chat(api_base, api_key, model, messages, temperature=0.7, timeout=180
         return
 
     if resp.status_code != 200:
-        yield None, f"API 错误 [{resp.status_code}]: {resp.text[:500]}"
+        yield None, f"大模型接口请求失败（HTTP {resp.status_code}）：{resp.text[:500]}"
         return
 
     for line in resp.iter_lines(decode_unicode=True):
@@ -250,6 +307,44 @@ TOOLS = [
 ]
 
 _MAX_AGENT_ITERATIONS = 10  # 防止无限循环
+
+
+def _sanitize_tool_args(tool_name, args, df):
+    """Clamp LLM-provided tool args before executing local tools."""
+    if not isinstance(args, dict):
+        args = {}
+
+    if tool_name == "get_column_details":
+        columns = args.get("columns", [])
+        if isinstance(columns, str):
+            columns = [columns]
+        if not isinstance(columns, list):
+            columns = []
+        return {"columns": [c for c in columns if c in df.columns][:10]}
+
+    if tool_name in {"run_regression", "run_classification"}:
+        target = args.get("target_column", "")
+        return {
+            "target_column": target if target in df.columns else "",
+            "epochs": _safe_int(args.get("epochs", 120), 120, 50, 200),
+            "learning_rate": _safe_float(args.get("learning_rate", 0.001), 0.001, 1e-5, 0.05),
+        }
+
+    if tool_name == "run_clustering":
+        algorithm = args.get("algorithm", "kmeans")
+        if algorithm not in {"kmeans", "dbscan"}:
+            algorithm = "kmeans"
+        return {
+            "algorithm": algorithm,
+            "n_clusters": _safe_int(args.get("n_clusters", 3), 3, 2, 10),
+            "eps": _safe_float(args.get("eps", 0.5), 0.5, 0.05, 5.0),
+            "min_samples": _safe_int(args.get("min_samples", 5), 5, 2, 50),
+        }
+
+    if tool_name == "run_correlation_analysis":
+        return {"top_n": _safe_int(args.get("top_n", 10), 10, 3, 30)}
+
+    return args
 
 
 def _build_system_prompt(df):
@@ -532,6 +627,14 @@ def agent_chat(api_base, api_key, model, messages, session_id):
     if not ok:
         yield {"error": {"code": "INVALID_API_BASE", "message": err}}
         return
+    ok, model_err = _validate_model_name(model)
+    if not ok:
+        yield {"error": {"code": "INVALID_MODEL", "message": model_err}}
+        return
+    ok, msg_err = _validate_messages(messages)
+    if not ok:
+        yield {"error": {"code": "INVALID_MESSAGES", "message": msg_err}}
+        return
 
     effective_key = _resolve_key(api_key)
     if not effective_key:
@@ -540,10 +643,11 @@ def agent_chat(api_base, api_key, model, messages, session_id):
 
     df = get_session(session_id)
     if df is None:
-        yield {"error": {"code": "SESSION_EXPIRED", "message": "Session not found or expired. Please re-upload data."}}
+        yield {"error": {"code": "SESSION_EXPIRED", "message": "当前数据会话已失效，请重新上传或同步数据后再试。"}}
         return
 
     system_prompt = _build_system_prompt(df)
+    messages = _trim_messages(messages)
 
     # Build full message list with system prompt
     full_messages = [{"role": "system", "content": system_prompt}]
@@ -559,6 +663,7 @@ def agent_chat(api_base, api_key, model, messages, session_id):
     }
 
     tool_results_context = []
+    tool_call_count = 0
 
     for iteration in range(_MAX_AGENT_ITERATIONS):
         try:
@@ -574,7 +679,7 @@ def agent_chat(api_base, api_key, model, messages, session_id):
             return
 
         if resp.status_code != 200:
-            yield {"error": {"code": "LLM_API_ERROR", "message": f"API 错误 [{resp.status_code}]: {resp.text[:500]}"}}
+            yield {"error": {"code": "LLM_API_ERROR", "message": f"大模型接口请求失败（HTTP {resp.status_code}）：{resp.text[:500]}"}}
             return
 
         try:
@@ -592,19 +697,24 @@ def agent_chat(api_base, api_key, model, messages, session_id):
             full_messages.append(msg)
 
             for tc in tool_calls:
+                if tool_call_count >= _MAX_AGENT_TOOL_CALLS:
+                    yield {"error": {"code": "AGENT_TOOL_LIMIT", "message": f"本次 Agent 分析已达到 {_MAX_AGENT_TOOL_CALLS} 次工具调用上限，请缩小问题范围后继续。"}}
+                    return
                 func = tc["function"]
                 tool_name = func["name"]
                 try:
                     tool_args = json.loads(func.get("arguments", "{}"))
                 except json.JSONDecodeError:
                     tool_args = {}
+                tool_args = _sanitize_tool_args(tool_name, tool_args, df)
+                tool_call_count += 1
 
                 yield {"status": "tool_call", "tool": tool_name, "args": tool_args}
 
                 result_str = _execute_tool(tool_name, tool_args, df, session_id)
                 # Truncate very long results
-                if len(result_str) > 6000:
-                    result_str = result_str[:6000] + "\n... (结果已截断)"
+                if len(result_str) > _MAX_TOOL_RESULT_CHARS:
+                    result_str = result_str[:_MAX_TOOL_RESULT_CHARS] + "\n... (结果已截断)"
 
                 yield {"status": "tool_result", "tool": tool_name, "result": result_str}
 

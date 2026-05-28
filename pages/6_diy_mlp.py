@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_small_dataset_warning, render_class_balance_warning, render_risk_notice
 from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel, list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version
 
 st.set_page_config(page_title="自定义 MLP", layout="wide", initial_sidebar_state="collapsed")
@@ -37,7 +37,7 @@ if len(df_clean) < 10:
     st.error("❌ 数据无效！删除缺失值后不足10行")
     st.stop()
 
-render_backend_sync_panel(df_clean)
+backend_synced = render_backend_sync_panel(df_clean, compact=True)
 
 numeric_df.columns = numeric_df.columns.astype(str)
 all_num_cols = list(numeric_df.columns)
@@ -68,12 +68,14 @@ if task_type == "分类 (Classification)":
         st.error("❌ 目标列类别数 < 2，无法分类！")
         st.stop()
     if n_classes > n_samples * 0.5:
-        st.warning(f"⚠️ 类别数 ({n_classes}) 接近样本数 ({n_samples})，容易过拟合")
+        render_risk_notice("类别过多", f"类别数 ({n_classes}) 接近样本数 ({n_samples})，容易过拟合。")
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征 | {n_classes} 类别")
+    render_class_balance_warning(df_clean[target_col])
 else:
     n_classes = None
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 特征")
 
+render_small_dataset_warning(n_samples)
 check_constant_features(numeric_df, feature_cols)
 
 # Version selector
@@ -81,13 +83,15 @@ active_vid = render_version_selector("DIY MLP", list_diy_mlp_versions, activate_
 
 # Auto-detect saved model — reloads when active version changes
 status = diy_mlp_status()
+render_ml_status_bar(df_clean, backend_synced, status, "DIY MLP")
 current_vid = status.get("version_id", "") if status else ""
 if "diy_result" not in st.session_state or st.session_state.get("diy_version_id") != current_vid:
     if status and status.get("has_model"):
         st.session_state.diy_result = {"train_losses": [], "val_losses": []}
         st.session_state.diy_features = status.get("features", [])
         st.session_state.diy_target = status.get("target", "")
-        saved_task = status.get("params", {}).get("task", "regression")
+        saved_params = status.get("params", {})
+        saved_task = saved_params.get("task") or ("classification" if saved_params.get("n_classes") else "regression")
         st.session_state.diy_task = saved_task
         if saved_task == "classification":
             st.session_state.diy_n_classes = status.get("params", {}).get("n_classes", 2)
@@ -100,6 +104,9 @@ if "diy_result" not in st.session_state or st.session_state.get("diy_version_id"
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载 DIY MLP 模型版本（{ds} | {created} | 目标列：{st.session_state.diy_target}）")
+
+current_task_str = "classification" if "分类" in task_type else "regression"
+render_task_mismatch_warning("DIY MLP", current_task_str, st.session_state.get("diy_task"))
 
 # ── Layer builder UI ──
 st.subheader("🧱 网络结构设计")
@@ -256,8 +263,8 @@ with train_col:
                     st.toast(f"训练完成！准确率 = {result['acc']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
 
                 plot_loss_curve(result["train_losses"], result["val_losses"])
-            else:
-                st.toast(f"训练失败：{result}", icon="❌")
+            elif result is not None:
+                st.toast("训练没有完成：后端返回的结果不完整，请查看后端终端日志。", icon="❌")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
@@ -296,11 +303,12 @@ else:
             st.toast("输入特征数与模型特征数不匹配！", icon="❌")
         else:
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
-            err = validate_input_array(np.array([input_data]), "单条预测")
+            version_id = st.session_state.get("diy_version_id")
+            err = validate_input_array(np.array([input_data]), "单条预测", expected_features=len(features))
             if err:
                 st.toast(err, icon="❌")
             else:
-                result = predict_diy_mlp(input_data, device_str)
+                result = predict_diy_mlp(input_data, device_str, version_id=version_id)
                 if result:
                     if task == "regression":
                         st.toast(f"预测结果：**{result['result']:.4f}**", icon="✅")
@@ -329,11 +337,12 @@ else:
         else:
             batch_X = batch_df[features].values
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
-            err = validate_input_array(batch_X, "批量预测")
+            version_id = st.session_state.get("diy_version_id")
+            err = validate_input_array(batch_X, "批量预测", expected_features=len(features))
             if err:
                 st.toast(err, icon="❌")
             else:
-                result = batch_predict_diy_mlp(batch_X.tolist(), device_str)
+                result = batch_predict_diy_mlp(batch_X.tolist(), device_str, version_id=version_id)
                 if result:
                     if task == "regression":
                         result_df = batch_df.copy()

@@ -195,7 +195,7 @@ def _load_model(device, version_id=None):
     """Load model, scaler, config for the active (or specified) version."""
     paths, meta = get_model_paths("classification", version_id)
     if not paths:
-        return None, None, None, "No saved model found."
+        return None, None, None, "没有找到已保存的分类模型，请先训练模型或切换到有效版本。"
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)

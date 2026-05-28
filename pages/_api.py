@@ -11,6 +11,42 @@ API_BASE = os.environ.get("INDETERMINATE_API_BASE", "http://127.0.0.1:5001/api")
 CONNECT_TIMEOUT = 2  # fail fast if backend is down
 
 
+ERROR_CODE_TITLES = {
+    "INPUT_VALIDATION_FAILED": "训练前校验未通过",
+    "SESSION_EXPIRED": "当前数据已过期",
+    "MODEL_NOT_FOUND": "还没有可用模型",
+    "VERSION_NOT_FOUND": "模型版本不存在",
+    "MISSING_FIELD": "请求参数不完整",
+    "TRAINING_FAILED": "训练没有完成",
+    "PREDICTION_FAILED": "预测没有完成",
+    "PAYLOAD_TOO_LARGE": "文件太大",
+    "NOT_FOUND": "接口不存在",
+    "INTERNAL_ERROR": "后端内部错误",
+}
+
+ERROR_CODE_HINTS = {
+    "INPUT_VALIDATION_FAILED": "请根据提示调整列选择、空值、类别数或 batch size 后再试。",
+    "SESSION_EXPIRED": "请重新上传数据，或点击页面中的“重新同步当前数据到后端”。",
+    "MODEL_NOT_FOUND": "请先训练模型，或在模型版本列表中切换到一个有效版本。",
+    "VERSION_NOT_FOUND": "该版本可能已被删除，请刷新版本列表后再试。",
+    "MISSING_FIELD": "请刷新页面后重试；如果仍然出现，说明前后端参数可能不一致。",
+    "TRAINING_FAILED": "请检查训练参数和数据质量后再试。",
+    "PREDICTION_FAILED": "请检查输入特征数量、顺序和数值类型。",
+    "PAYLOAD_TOO_LARGE": "请压缩、拆分文件，或减少数据量后再上传。",
+    "NOT_FOUND": "请确认后端版本和前端页面来自同一份项目代码。",
+    "INTERNAL_ERROR": "请查看后端终端日志获取详细原因。",
+}
+
+
+def _set_last_api_error(message):
+    st.session_state["_last_api_error"] = message
+
+
+def pop_last_api_error():
+    """Return and clear the latest readable API error shown by this client."""
+    return st.session_state.pop("_last_api_error", "")
+
+
 def _format_error_payload(payload, fallback):
     """Return a readable error string from new or legacy backend payloads."""
     if not isinstance(payload, dict):
@@ -21,9 +57,15 @@ def _format_error_payload(payload, fallback):
         code = error.get("code") or "ERROR"
         message = error.get("message") or fallback
         detail = error.get("detail") or ""
-        if detail and detail != message:
-            return f"{code}: {message} ({detail})"
-        return f"{code}: {message}"
+        title = ERROR_CODE_TITLES.get(code, "操作未完成")
+        hint = ERROR_CODE_HINTS.get(code, "")
+        reason = detail or message
+        parts = [title]
+        if reason:
+            parts.append(reason)
+        if hint and hint not in parts:
+            parts.append(hint)
+        return "：".join(parts[:2]) + (f"。{hint}" if hint and len(parts) > 2 else "")
     if isinstance(error, str):
         return error
     return fallback
@@ -137,8 +179,9 @@ def _post(path, json_data=None, files=None, timeout=300):
             try:
                 err = _format_error_payload(resp.json(), f"HTTP {resp.status_code}")
             except Exception:
-                err = f"HTTP {resp.status_code} (非 JSON 响应)"
-            st.toast(f"API 错误 [{path}]: {err}", icon="❌")
+                err = f"后端请求失败：HTTP {resp.status_code}（返回内容不是有效 JSON）"
+            _set_last_api_error(err)
+            st.toast(err, icon="❌")
             return None
         try:
             return resp.json()
@@ -148,15 +191,21 @@ def _post(path, json_data=None, files=None, timeout=300):
     except requests.exceptions.ConnectionError:
         ok, info = _backend_ok()
         if ok:
-            st.toast(f"Flask 后端连接异常（健康检查通过但 {path} 被拒绝）。请重启后端。", icon="❌")
+            msg = "Flask 后端连接异常。健康检查通过，但当前接口请求被拒绝，请重启后端后再试。"
         else:
-            st.toast("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。", icon="❌")
+            msg = "无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
     except requests.exceptions.Timeout:
-        st.toast(f"请求超时 ({path})。请检查后端是否正常运行。", icon="❌")
+        msg = "请求超时。训练可能耗时过长，或后端暂时无响应，请检查后端终端状态。"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
     except requests.exceptions.RequestException as e:
-        st.toast(f"网络错误 ({path}): {e}", icon="❌")
+        msg = f"网络请求失败：{e}"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
 
 
@@ -186,8 +235,9 @@ def _delete(path, timeout=30):
             try:
                 err = _format_error_payload(resp.json(), f"HTTP {resp.status_code}")
             except Exception:
-                err = f"HTTP {resp.status_code} (非 JSON 响应)"
-            st.toast(f"API 错误 [{path}]: {err}", icon="❌")
+                err = f"后端请求失败：HTTP {resp.status_code}（返回内容不是有效 JSON）"
+            _set_last_api_error(err)
+            st.toast(err, icon="❌")
             return None
         try:
             return resp.json()
@@ -195,13 +245,19 @@ def _delete(path, timeout=30):
             st.toast(f"后端返回了无效的 JSON 响应 (HTTP {resp.status_code})", icon="❌")
             return None
     except requests.exceptions.ConnectionError:
-        st.toast("无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。", icon="❌")
+        msg = "无法连接到 Flask 后端。请在新终端中运行 `cd backend && python app.py` 启动后端。"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
     except requests.exceptions.Timeout:
-        st.toast(f"请求超时 ({path})。请检查后端是否正常运行。", icon="❌")
+        msg = "请求超时。请检查后端是否正常运行。"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
     except requests.exceptions.RequestException as e:
-        st.toast(f"网络错误 ({path}): {e}", icon="❌")
+        msg = f"网络请求失败：{e}"
+        _set_last_api_error(msg)
+        st.toast(msg, icon="❌")
         return None
 
 
@@ -310,12 +366,12 @@ def train_regression(session_id, target_col, feature_cols, lr, epochs, batch_siz
     }, timeout=600)
 
 
-def predict_regression(features, device="cpu"):
-    return _post("/regression/predict", json_data={"features": features, "device": device})
+def predict_regression(features, device="cpu", version_id=None):
+    return _post("/regression/predict", json_data={"features": features, "device": device, "version_id": version_id})
 
 
-def batch_predict_regression(rows, device="cpu"):
-    return _post("/regression/batch_predict", json_data={"rows": rows, "device": device})
+def batch_predict_regression(rows, device="cpu", version_id=None):
+    return _post("/regression/batch_predict", json_data={"rows": rows, "device": device, "version_id": version_id})
 
 
 def clear_regression():
@@ -349,12 +405,12 @@ def train_classification(session_id, target_col, feature_cols, lr, epochs, batch
     }, timeout=600)
 
 
-def predict_classification(features, device="cpu"):
-    return _post("/classification/predict", json_data={"features": features, "device": device})
+def predict_classification(features, device="cpu", version_id=None):
+    return _post("/classification/predict", json_data={"features": features, "device": device, "version_id": version_id})
 
 
-def batch_predict_classification(rows, device="cpu"):
-    return _post("/classification/batch_predict", json_data={"rows": rows, "device": device})
+def batch_predict_classification(rows, device="cpu", version_id=None):
+    return _post("/classification/batch_predict", json_data={"rows": rows, "device": device, "version_id": version_id})
 
 
 def clear_classification():
@@ -391,12 +447,12 @@ def train_diy_mlp(session_id, target_col, feature_cols, layers, task_type, n_cla
     }, timeout=600)
 
 
-def predict_diy_mlp(features, device="cpu"):
-    return _post("/diy_mlp/predict", json_data={"features": features, "device": device})
+def predict_diy_mlp(features, device="cpu", version_id=None):
+    return _post("/diy_mlp/predict", json_data={"features": features, "device": device, "version_id": version_id})
 
 
-def batch_predict_diy_mlp(rows, device="cpu"):
-    return _post("/diy_mlp/batch_predict", json_data={"rows": rows, "device": device})
+def batch_predict_diy_mlp(rows, device="cpu", version_id=None):
+    return _post("/diy_mlp/batch_predict", json_data={"rows": rows, "device": device, "version_id": version_id})
 
 
 def clear_diy_mlp():
@@ -429,8 +485,8 @@ def train_decision_tree(session_id, target_col, feature_cols, task_type, criteri
     })
 
 
-def predict_decision_tree(input_dict, task_type):
-    return _post("/decision_tree/predict", json_data={"input_dict": input_dict, "task_type": task_type})
+def predict_decision_tree(input_dict, task_type, version_id=None):
+    return _post("/decision_tree/predict", json_data={"input_dict": input_dict, "task_type": task_type, "version_id": version_id})
 
 
 def clear_decision_tree():
@@ -468,8 +524,8 @@ def elbow_clustering(session_id, feature_cols, max_k):
     })
 
 
-def predict_clustering(features):
-    return _post("/clustering/predict", json_data={"features": features})
+def predict_clustering(features, version_id=None):
+    return _post("/clustering/predict", json_data={"features": features, "version_id": version_id})
 
 
 def clear_clustering():

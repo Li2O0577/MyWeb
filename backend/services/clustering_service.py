@@ -145,7 +145,7 @@ def predict_one(feature_values, version_id=None):
 
     paths, meta = get_model_paths("clustering", version_id)
     if not paths:
-        return None, "No saved model found."
+        return None, "没有找到已保存的聚类模型，请先训练模型或切换到有效版本。"
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)

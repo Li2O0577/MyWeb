@@ -81,22 +81,22 @@ def health():
 
 @app.errorhandler(404)
 def not_found(_err):
-    return api_error("NOT_FOUND", "API endpoint not found", 404)
+    return api_error("NOT_FOUND", "没有找到对应的后端接口", 404)
 
 
 @app.errorhandler(413)
 def too_large(_err):
     return api_error(
         "PAYLOAD_TOO_LARGE",
-        "Uploaded file exceeds the 256 MB size limit",
+        "上传文件超过 256 MB 限制",
         413,
-        detail="Please split the file or reduce its size before uploading.",
+        detail="请先压缩、拆分文件，或减少数据量后再上传。",
     )
 
 
 @app.errorhandler(500)
 def internal_error(err):
-    return api_error("INTERNAL_ERROR", "Internal server error", 500, str(err))
+    return api_error("INTERNAL_ERROR", "后端处理时出现内部错误", 500, str(err))
 
 
 if __name__ == "__main__":

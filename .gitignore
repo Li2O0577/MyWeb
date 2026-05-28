@@ -24,6 +24,14 @@ logs/
 *.log
 log/
 
+# 测试/覆盖率产物
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
 # 系统垃圾
 .DS_Store
 Thumbs.db
@@ -53,6 +61,8 @@ backend/models/registry.json
 # 临时文件
 *.tmp
 *.temp
+tmp/
+temp/
 
 # 后端 session 临时数据
 backend/sessions/

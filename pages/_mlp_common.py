@@ -4,8 +4,85 @@ import torch
 import os
 import pickle
 import json
+import html
 import numpy as np
 import plotly.graph_objects as go
+
+
+TASK_NAMES = {"classification": "分类", "regression": "回归"}
+
+
+# ── Shared ML page UI ──
+
+def render_ml_status_bar(df, backend_synced=False, model_status=None, model_label="模型"):
+    """Render a compact, consistent status strip for ML pages."""
+    meta = st.session_state.get("session_meta", {}) or {}
+    dataset_name = html.escape(str(meta.get("source_name", "当前数据")))
+    rows = meta.get("rows", len(df) if df is not None else 0)
+    cols = meta.get("n_columns", len(df.columns) if df is not None else 0)
+
+    has_model = bool(model_status and model_status.get("has_model"))
+    if has_model:
+        version_id = model_status.get("version_id", "")
+        created = (model_status.get("created_at", "") or "")[:16].replace("T", " ")
+        target = model_status.get("target", "")
+        model_text = f"{html.escape(str(model_label))}：{html.escape(str(version_id[:18]))}..."
+        if target:
+            model_text += f" | 目标：{html.escape(str(target))}"
+        if created:
+            model_text += f" | {html.escape(str(created))}"
+    else:
+        model_text = f"{html.escape(str(model_label))}：暂无已加载版本"
+
+    st.markdown(
+        f"""
+        <div style="display:grid;grid-template-columns:1.25fr 1fr 1.6fr;gap:8px;margin:8px 0 14px 0;">
+          <div style="border:1px solid #d0d7de;border-radius:6px;padding:8px 10px;">
+            <div style="font-size:12px;color:#6b7280;">当前数据集</div>
+            <div style="font-size:14px;">{dataset_name} · {rows} 行 · {cols} 列</div>
+          </div>
+          <div style="border:1px solid #d0d7de;border-radius:6px;padding:8px 10px;">
+            <div style="font-size:12px;color:#6b7280;">后端同步状态</div>
+            <div style="font-size:14px;">{'已同步，可以训练' if backend_synced else '未同步或后端不可用'}</div>
+          </div>
+          <div style="border:1px solid #d0d7de;border-radius:6px;padding:8px 10px;">
+            <div style="font-size:12px;color:#6b7280;">当前模型版本</div>
+            <div style="font-size:14px;">{model_text}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_risk_notice(title, detail, level="warning"):
+    """Render risk hints in one consistent format."""
+    text = f"⚠️ 风险提示｜{title}：{detail}"
+    if level == "info":
+        st.info(text)
+    else:
+        st.warning(text)
+
+
+def render_small_dataset_warning(n_samples, threshold=50):
+    if n_samples < threshold:
+        render_risk_notice(
+            "样本量偏小",
+            f"当前只有 {n_samples} 行有效数据，训练指标波动会较大，建议补充数据或优先使用简单模型。",
+        )
+
+
+def render_class_balance_warning(series):
+    counts = series.value_counts(dropna=True)
+    if len(counts) < 2:
+        return
+    min_count = int(counts.min())
+    max_count = int(counts.max())
+    if min_count < 3 or (max_count and min_count / max_count < 0.2):
+        render_risk_notice(
+            "类别不均衡",
+            f"最少类别 {min_count} 条，最多类别 {max_count} 条，分类结果可能偏向多数类。",
+        )
 
 
 # ── Device selector ──
@@ -28,12 +105,54 @@ def render_device_selector():
 
 # ── Input validation ──
 
-def validate_input_array(arr, context=""):
-    """Return error message if array contains NaN/Inf, else None."""
-    if not np.isfinite(arr).all():
-        prefix = f"{context}: " if context else ""
-        return f"⚠️ {prefix}输入包含无效值（NaN 或 Inf），请检查输入数据。"
+def validate_input_array(arr, context="", expected_features=None):
+    """Return a user-friendly error message for prediction input arrays."""
+    prefix = f"{context}: " if context else ""
+
+    try:
+        raw = np.asarray(arr)
+    except Exception:
+        return f"⚠️ {prefix}输入数据无法读取，请检查格式。"
+
+    if raw.size == 0:
+        return f"⚠️ {prefix}输入为空，请先填写特征值。"
+
+    if raw.ndim == 1:
+        n_features = raw.shape[0]
+    elif raw.ndim == 2:
+        n_features = raw.shape[1]
+    else:
+        return f"⚠️ {prefix}输入维度不正确，请使用一行或二维表格数据。"
+
+    if expected_features is not None and n_features != expected_features:
+        return (
+            f"⚠️ {prefix}特征数量不匹配：模型需要 {expected_features} 个特征，"
+            f"当前输入为 {n_features} 个。"
+        )
+
+    try:
+        values = raw.astype(float)
+    except (TypeError, ValueError):
+        return f"⚠️ {prefix}输入包含非数值内容，请先转换为数值或在数据处理页完成编码。"
+
+    if np.isnan(values).any():
+        return f"⚠️ {prefix}输入包含空值（NaN），请补全后再预测。"
+    if np.isinf(values).any():
+        return f"⚠️ {prefix}输入包含无穷值（Inf），请清洗后再预测。"
     return None
+
+
+def render_task_mismatch_warning(model_label, selected_task, model_task):
+    """Warn when the loaded model task differs from the current page setting."""
+    if not selected_task or not model_task or selected_task == model_task:
+        return False
+    task_names = {"classification": "分类", "regression": "回归"}
+    st.warning(
+        f"⚠️ 当前页面选择的是{task_names.get(selected_task, selected_task)}任务，"
+        f"但已加载的{model_label}模型是{task_names.get(model_task, model_task)}任务。"
+        "预测区会按已加载模型的任务类型执行；如果要训练当前任务，请点击重新训练。"
+    )
+    return True
 
 
 # ── Constant feature detection ──
@@ -48,7 +167,7 @@ def check_constant_features(df, feature_cols):
             bad.append((col, vals.iloc[0] if len(vals) > 0 else "NaN"))
     if bad:
         names = ", ".join(f"「{c}」" for c, _ in bad)
-        st.warning(f"⚠️ 检测到常数列（方差为 0）：{names}。StandardScaler 对这些列无效，建议在数据处理页移除。")
+        render_risk_notice("常量特征", f"{names} 方差为 0，建议在数据处理页移除。")
     return bad
 
 
@@ -132,4 +251,3 @@ def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
                     st.rerun()
 
     return active
-

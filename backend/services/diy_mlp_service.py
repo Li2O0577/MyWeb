@@ -215,7 +215,7 @@ def train(df, target_col, feature_cols, layers_config,
         json.dump(config_dict, f, ensure_ascii=False)
 
     metrics = {}
-    params = {"layers": layers_config, "learning_rate": learning_rate,
+    params = {"task": task_type, "layers": layers_config, "learning_rate": learning_rate,
               "optimizer": optimizer_name, "epochs": epochs, "batch_size": batch_size}
     if is_cls:
         metrics["acc"] = result.get("acc")
@@ -246,7 +246,7 @@ def _load_model(device, version_id=None):
     """Load model, scaler, config for the active (or specified) version."""
     paths, meta = get_model_paths("diy_mlp", version_id)
     if not paths:
-        return None, None, None, "No saved model found."
+        return None, None, None, "没有找到已保存的 DIY MLP 模型，请先训练模型或切换到有效版本。"
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)

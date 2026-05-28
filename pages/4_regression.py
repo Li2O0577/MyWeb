@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_small_dataset_warning
 from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel, list_regression_versions, activate_regression_version, delete_regression_version
 
 st.set_page_config(page_title="回归预测", layout="wide", initial_sidebar_state="collapsed")
@@ -34,13 +34,14 @@ if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
     st.error("❌ 数据无效！需要至少2列数值数据 + 10行数据")
     st.stop()
 
-render_backend_sync_panel(numeric_df)
+backend_synced = render_backend_sync_panel(numeric_df, compact=True)
 
 # Version selector
 active_vid = render_version_selector("回归", list_regression_versions, activate_regression_version, delete_regression_version)
 
 # Auto-detect saved model — reloads when active version changes
 status = regression_status()
+render_ml_status_bar(numeric_df, backend_synced, status, "回归")
 current_vid = status.get("version_id", "") if status else ""
 if "reg_result" not in st.session_state or st.session_state.get("reg_version_id") != current_vid:
     if status and status.get("has_model"):
@@ -69,6 +70,7 @@ with col1:
         st.warning("⚠️ 警告：选择的目标列覆盖了所有列，无可用特征列！请重新选择目标列")
         st.stop()
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征")
+    render_small_dataset_warning(n_samples)
     check_constant_features(numeric_df, feature_cols)
 
 with col2:
@@ -113,8 +115,8 @@ with train_col:
 
                 st.toast(f"训练完成！R² = {result['r2']:.4f} | MAE = {result['mae']:.4f} | RMSE = {result['rmse']:.4f} | 版本: {result.get('version_id', '?')[:20]}...", icon="✅")
                 plot_loss_curve(result["train_losses"], result["val_losses"], y_label="损失值 (MSE)")
-            else:
-                st.toast(f"训练失败：{result}", icon="❌")
+            elif result is not None:
+                st.toast("训练没有完成：后端返回的结果不完整，请查看后端终端日志。", icon="❌")
 
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
@@ -140,11 +142,12 @@ else:
 
     if st.button("执行预测", use_container_width=True):
         device_str = "cuda" if "CUDA" in str(device) else "cpu"
-        err = validate_input_array(np.array([input_data]), "单条预测")
+        version_id = st.session_state.get("reg_version_id")
+        err = validate_input_array(np.array([input_data]), "单条预测", expected_features=len(features))
         if err:
             st.toast(err)
         else:
-            result = predict_regression(input_data, device_str)
+            result = predict_regression(input_data, device_str, version_id=version_id)
             if result and "result" in result:
                 st.toast(f"预测结果：{result['result']:.4f}", icon="✅")
 
@@ -158,11 +161,13 @@ else:
             st.toast(f"缺少特征列：{missing_cols}", icon="❌")
         else:
             batch_X = batch_df[features].values
-            err = validate_input_array(batch_X, "批量预测")
+            device_str = "cuda" if "CUDA" in str(device) else "cpu"
+            version_id = st.session_state.get("reg_version_id")
+            err = validate_input_array(batch_X, "批量预测", expected_features=len(features))
             if err:
                 st.toast(err, icon="❌")
             else:
-                result = batch_predict_regression(batch_X.tolist(), device_str)
+                result = batch_predict_regression(batch_X.tolist(), device_str, version_id=version_id)
                 if result and "predictions" in result:
                     result_df = batch_df.copy()
                     result_df[f"预测_{target}"] = result["predictions"]

@@ -238,7 +238,7 @@ if send_btn:
                 resp = agent_chat_llm(sid, api_base, api_key, model, agent_messages)
                 if resp.status_code != 200:
                     st.session_state.chat_messages.pop()
-                    st.toast(f"API 错误 [{resp.status_code}]", icon="❌")
+                    st.toast(f"大模型分析请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
                     st.stop()
 
                 for line in resp.iter_lines(decode_unicode=True):
@@ -356,7 +356,7 @@ if send_btn:
                         st.session_state.chat_messages.pop()
                         if data_was_attached:
                             st.session_state.chat_data_sent = False
-                        st.toast(f"API 错误 [{resp.status_code}]", icon="❌")
+                        st.toast(f"大模型请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
                         st.stop()
 
                     for line in resp.iter_lines(decode_unicode=True):
@@ -375,9 +375,9 @@ if send_btn:
                                     message = err.get("message", "请求失败")
                                     detail = err.get("detail", "")
                                     suffix = f" ({detail})" if detail and detail != message else ""
-                                    st.toast(f"API 错误: {code}: {message}{suffix}", icon="❌")
+                                    st.toast(f"请求没有完成：{message}{suffix}", icon="❌")
                                 else:
-                                    st.toast(f"API 错误: {err}", icon="❌")
+                                    st.toast(f"请求没有完成：{err}", icon="❌")
                                 st.stop()
                             if event.get("done"):
                                 break

@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_version_selector
+from pages._mlp_common import render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_small_dataset_warning, render_class_balance_warning, render_risk_notice
 from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree, ensure_session, decision_tree_status, backend_status_badge, render_backend_sync_panel, list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version
 
 st.set_page_config(page_title="决策树", layout="wide", initial_sidebar_state="collapsed")
@@ -38,7 +38,7 @@ if len(df_clean) < 10 or df_clean.shape[1] < 2:
     st.error("❌ 数据无效！需要至少10行有效数据")
     st.stop()
 
-render_backend_sync_panel(df_clean)
+backend_synced = render_backend_sync_panel(df_clean, compact=True)
 
 numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
 categorical_cols = df_clean.select_dtypes(exclude=[np.number]).columns.tolist()
@@ -77,19 +77,22 @@ if st.session_state.dt_task_type == "classification":
         st.warning("⚠️ 目标列至少需要2个类别！")
         st.stop()
     if n_classes > n_samples * 0.5:
-        st.warning(f"⚠️ 类别数 ({n_classes}) 接近样本数 ({n_samples})，可能过拟合")
+        render_risk_notice("类别过多", f"类别数 ({n_classes}) 接近样本数 ({n_samples})，可能过拟合。")
+    render_class_balance_warning(df_clean[target_col])
 else:
     if target_col not in numeric_cols:
         st.warning("⚠️ 回归任务请选择数值型目标列！")
         st.stop()
 
 is_cls = (st.session_state.dt_task_type == "classification")
+render_small_dataset_warning(n_samples)
 
 # Version selector
 active_vid = render_version_selector("决策树", list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version)
 
 # Auto-detect saved model — reloads when active version changes
 status = decision_tree_status()
+render_ml_status_bar(df_clean, backend_synced, status, "决策树")
 current_vid = status.get("version_id", "") if status else ""
 if "dt_result" not in st.session_state or st.session_state.get("dt_version_id") != current_vid:
     if status and status.get("has_model"):
@@ -102,6 +105,8 @@ if "dt_result" not in st.session_state or st.session_state.get("dt_version_id") 
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载决策树模型版本（{ds} | {created} | 目标列：{st.session_state.dt_target}）")
+
+render_task_mismatch_warning("决策树", st.session_state.dt_task_type, st.session_state.get("dt_task_saved"))
 
 st.subheader("🚀 模型训练")
 train_col, clear_col = st.columns(2)
@@ -152,8 +157,8 @@ with train_col:
                 if "tree_nodes" in result:
                     st.markdown("### 📊 每层节点详细信息")
                     st.dataframe(pd.DataFrame(result["tree_nodes"]), use_container_width=True)
-            else:
-                st.toast(f"训练失败：{result}", icon="❌")
+            elif result is not None:
+                st.toast("训练没有完成：后端返回的结果不完整，请查看后端终端日志。", icon="❌")
 
 with clear_col:
     if st.button("清除已保存决策树模型", use_container_width=True):
@@ -200,7 +205,7 @@ else:
     btn_label = "执行分类预测" if predict_is_cls else "执行回归预测"
     if st.button(btn_label, use_container_width=True):
         task_str = "classification" if predict_is_cls else "regression"
-        result = predict_decision_tree(input_data, task_str)
+        result = predict_decision_tree(input_data, task_str, version_id=st.session_state.get("dt_version_id"))
         if result:
             if predict_is_cls:
                 st.toast(f"🎯 预测类别：{result['pred_class']}", icon="✅")

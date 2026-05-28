@@ -17,9 +17,9 @@ def api_error(code, message, status=400, detail=None):
 def missing_field(field):
     return api_error(
         "MISSING_FIELD",
-        f"Missing required field: {field}",
+        f"缺少必填参数：{field}",
         400,
-        detail=f"Required request field `{field}` was not provided.",
+        detail=f"请求中没有提供必填参数 `{field}`。",
     )
 
 
@@ -27,18 +27,18 @@ def missing_fields(fields):
     fields_text = ", ".join(fields)
     return api_error(
         "MISSING_FIELD",
-        f"Missing required fields: {fields_text}",
+        f"缺少必填参数：{fields_text}",
         400,
-        detail=f"Required request fields were not provided: {fields_text}.",
+        detail=f"请求中没有提供这些必填参数：{fields_text}。",
     )
 
 
 def session_expired():
     return api_error(
         "SESSION_EXPIRED",
-        "Session not found or expired",
+        "当前数据会话已失效",
         404,
-        detail="Upload or sync the current dataset again before running this operation.",
+        detail="请重新上传数据，或点击页面中的“重新同步当前数据到后端”后再试。",
     )
 
 

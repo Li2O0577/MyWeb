@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_version_selector
+from pages._mlp_common import render_version_selector, validate_input_array, render_ml_status_bar, render_small_dataset_warning
 from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering, ensure_session, clustering_status, backend_status_badge, render_backend_sync_panel, list_clustering_versions, activate_clustering_version, delete_clustering_version
 
 st.set_page_config(page_title="聚类分析", layout="wide", initial_sidebar_state="collapsed")
@@ -32,11 +32,12 @@ if len(numeric_df) < 10 or numeric_df.shape[1] < 1:
     st.error("❌ 数据无效！需要至少10行数值数据")
     st.stop()
 
-render_backend_sync_panel(numeric_df)
+backend_synced = render_backend_sync_panel(numeric_df, compact=True)
 
 feature_cols = [col for col in numeric_df.columns]
 n_features = len(feature_cols)
 n_samples = len(numeric_df)
+render_small_dataset_warning(n_samples)
 
 if "cluster_algorithm" not in st.session_state:
     st.session_state.cluster_algorithm = "kmeans"
@@ -46,10 +47,10 @@ active_vid = render_version_selector("聚类", list_clustering_versions, activat
 
 # Auto-detect saved model — reloads when active version changes
 status = clustering_status()
+render_ml_status_bar(numeric_df, backend_synced, status, "聚类")
 current_vid = status.get("version_id", "") if status else ""
-if "cluster_result" not in st.session_state or st.session_state.get("cluster_version_id") != current_vid:
+if st.session_state.get("cluster_version_id") != current_vid:
     if status and status.get("has_model"):
-        st.session_state.cluster_result = {}
         st.session_state.cluster_features = status.get("features", [])
         algo = status.get("params", {}).get("algorithm", "kmeans")
         if algo == "dbscan":
@@ -57,7 +58,7 @@ if "cluster_result" not in st.session_state or st.session_state.get("cluster_ver
         st.session_state.cluster_version_id = current_vid
         ds = status.get("dataset_name", "")
         created = status.get("created_at", "")[:16].replace("T", " ")
-        st.success(f"已加载聚类模型版本（{ds} | {created} | {algo}）")
+        st.info(f"📦 已加载聚类模型版本（{ds} | {created} | {algo}）。重新训练以查看聚类结果。")
 
 st.subheader("⚙️ 算法选择与参数配置")
 alg_col, *param_cols = st.columns([1, 1, 1, 2])
@@ -155,7 +156,7 @@ with clear_col:
         st.warning("已清除聚类模型！")
 
 st.subheader("📈 聚类结果展示")
-if "cluster_result" in st.session_state:
+if st.session_state.get("cluster_result"):
     data = st.session_state.cluster_result
     feature_cols = st.session_state.cluster_features
 
@@ -190,7 +191,7 @@ if "cluster_result" in st.session_state:
 
 # Prediction (K-means only)
 st.subheader("🎯 聚类预测")
-if "cluster_result" not in st.session_state:
+if not st.session_state.get("cluster_result"):
     st.warning("请先训练模型！")
 elif data.get("algorithm") != "kmeans":
     st.info("💡 DBSCAN 不提供 predict() 方法。如需对新数据进行聚类，请切换到 K-means 算法。")
@@ -212,6 +213,10 @@ else:
                     val = col.number_input(f"特征 {features[idx]}", value=0.0, step=0.1, key=f"cluster_pred_{idx}")
                     input_data.append(val)
     if st.button("执行聚类预测", use_container_width=True):
-        result = predict_clustering(input_data)
-        if result and "cluster" in result:
-            st.toast(f"🎯 预测结果：该数据属于 **簇 {result['cluster']}**", icon="✅")
+        err = validate_input_array(np.array([input_data]), "聚类预测", expected_features=len(features))
+        if err:
+            st.toast(err, icon="❌")
+        else:
+            result = predict_clustering(input_data, version_id=st.session_state.get("cluster_version_id"))
+            if result and "cluster" in result:
+                st.toast(f"🎯 预测结果：该数据属于 **簇 {result['cluster']}**", icon="✅")

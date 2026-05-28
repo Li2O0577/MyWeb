@@ -157,7 +157,16 @@ def predict_one(input_dict, task_type, version_id=None):
     import pandas as pd
     paths, meta = get_model_paths("decision_tree", version_id)
     if not paths:
-        return None, "No saved model found."
+        return None, "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。"
+
+    model_task = meta.get("params", {}).get("task_type") if meta else None
+    if model_task and model_task != task_type:
+        task_names = {"classification": "分类", "regression": "回归"}
+        return None, (
+            f"当前决策树版本是{task_names.get(model_task, model_task)}模型，"
+            f"但本次请求按{task_names.get(task_type, task_type)}任务预测。"
+            "请切换到匹配的模型版本，或重新训练当前任务。"
+        )
 
     pipeline = _safe_load_pickle(paths["model"])
     input_df = pd.DataFrame(input_dict)

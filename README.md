@@ -127,6 +127,15 @@ powershell -ExecutionPolicy Bypass -File clean.ps1 -Force   # 跳过确认直接
 5. 在 ML 页面（回归/分类/DIY MLP/决策树/聚类）训练模型并预测
 6. 在「大模型分析」页面与 AI 对话：Smart 模式推荐方向、Direct 模式深入分析、Agent 模式让 AI 自主执行训练和推理
 
+### 6. 运行测试
+
+```bash
+python -m unittest discover -s tests
+python -m compileall .\backend .\pages .\tests
+```
+
+测试覆盖训练前校验、Flask 上传/训练/预测冒烟流程，适合在修改 ML 或 API 逻辑后快速确认主链路没有断。
+
 ## 项目结构
 
 ```
@@ -239,6 +248,9 @@ MyWeb1/
 - **DIY MLP**：自由设计网络结构，双任务支持，参数量/过拟合警告
 - **决策树**：Pipeline 预处理，规则可视化，节点详情
 - **聚类**：K-means + DBSCAN，肘部法则，轮廓系数，PCA 可视化
+- **统一体验**：各 ML 页面顶部统一展示当前数据集、后端同步状态、当前模型版本
+- **风险提示**：小数据集、类别不均衡、类别过多、常量特征等风险使用统一提示样式
+- **预测校验**：单条/批量预测会提前检查特征数量、空值、无穷值和非数值输入
 
 ### 大模型分析 (Page 9)
 - **Smart 模式**：发送数据摘要（自动截断至 8000 字符），AI 推荐分析方向
@@ -246,7 +258,8 @@ MyWeb1/
 - **Agent 模式**：AI 通过 function calling 自主调用平台工具
   - 支持 6 种工具：数据概览、列详情、回归训练、分类训练、聚类分析、相关性分析
   - AI 自动选择工具、执行分析、解读指标，实时展示调用进度
-  - 最多 10 轮迭代，需要支持 function calling 的模型
+  - 最多 10 轮迭代、12 次工具调用；工具参数会自动清洗和限幅，工具结果会截断，避免单次分析失控
+  - 需要支持 function calling 的模型
 - SSE 流式响应，聊天界面
 - API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ `LLM_API_KEY` 环境密钥支持
 
@@ -257,6 +270,7 @@ MyWeb1/
 - **文件上传**：256MB 硬限制，防止内存耗尽
 - **Session 存储**：Parquet + JSON 替代 pickle，消除反序列化代码执行风险
 - **模型加载**：sklearn Pipeline / KMeans 加载时进行类型验证
+- **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围，失败时返回结构化中文错误
 
 ## 开发者
 

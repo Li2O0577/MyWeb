@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_small_dataset_warning, render_class_balance_warning, render_risk_notice
 from pages._api import train_classification, predict_classification, batch_predict_classification, clear_classification, ensure_session, classification_status, backend_status_badge, render_backend_sync_panel, list_classification_versions, activate_classification_version, delete_classification_version
 
 st.set_page_config(page_title="分类决策", layout="wide", initial_sidebar_state="collapsed")
@@ -42,13 +42,14 @@ if len(df_clean) < 10:
     st.stop()
 target_options = list(df.columns)
 
-render_backend_sync_panel(df_clean)
+backend_synced = render_backend_sync_panel(df_clean, compact=True)
 
 # Version selector
 active_vid = render_version_selector("分类", list_classification_versions, activate_classification_version, delete_classification_version)
 
 # Auto-detect saved model — reloads when active version changes
 status = classification_status()
+render_ml_status_bar(df_clean, backend_synced, status, "分类")
 current_vid = status.get("version_id", "") if status else ""
 if "cls_result" not in st.session_state or st.session_state.get("cls_version_id") != current_vid:
     if status and status.get("has_model"):
@@ -79,8 +80,10 @@ with col1:
         st.warning(f"⚠️ 警告：选择的目标列「{target_col}」仅包含 {n_classes} 个类别，无法进行分类任务！")
         st.stop()
     if n_classes > n_samples * 0.5:
-        st.warning(f"⚠️ 警告：类别数接近样本数，可能过拟合！建议更换目标列")
+        render_risk_notice("类别过多", "类别数接近样本数，可能把 ID 或连续值当成标签，建议更换目标列。")
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征 | {n_classes} 个类别")
+    render_small_dataset_warning(n_samples)
+    render_class_balance_warning(df_clean[target_col])
     check_constant_features(numeric_df, feature_cols)
 
 st.subheader("⚡ 训练参数")
@@ -139,8 +142,8 @@ with train_col:
                     st.plotly_chart(fig_cm, use_container_width=True)
 
                 plot_loss_curve(result["train_losses"], result["val_losses"])
-            else:
-                st.toast(f"训练失败：{result}", icon="❌")
+            elif result is not None:
+                st.toast("训练没有完成：后端返回的结果不完整，请查看后端终端日志。", icon="❌")
 
 with clear_col:
     if st.button("清除已保存分类模型", use_container_width=True):
@@ -169,11 +172,12 @@ else:
 
     if st.button("执行决策预测", use_container_width=True):
         device_str = "cuda" if "CUDA" in str(device) else "cpu"
-        err = validate_input_array(np.array([input_data]), "单条预测")
+        version_id = st.session_state.get("cls_version_id")
+        err = validate_input_array(np.array([input_data]), "单条预测", expected_features=len(features))
         if err:
             st.toast(err, icon="❌")
         else:
-            result = predict_classification(input_data, device_str)
+            result = predict_classification(input_data, device_str, version_id=version_id)
             if result and "pred_idx" in result:
                 pred_idx = result["pred_idx"]
                 pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
@@ -189,11 +193,13 @@ else:
             st.toast(f"缺少特征列：{missing_cols}", icon="❌")
         else:
             batch_X = batch_df[features].values
-            err = validate_input_array(batch_X, "批量预测")
+            device_str = "cuda" if "CUDA" in str(device) else "cpu"
+            version_id = st.session_state.get("cls_version_id")
+            err = validate_input_array(batch_X, "批量预测", expected_features=len(features))
             if err:
                 st.toast(err, icon="❌")
             else:
-                result = batch_predict_classification(batch_X.tolist(), device_str)
+                result = batch_predict_classification(batch_X.tolist(), device_str, version_id=version_id)
                 if result and "pred_indices" in result:
                     result_df = batch_df.copy()
                     result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in result["pred_indices"]]
