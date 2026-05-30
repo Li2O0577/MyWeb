@@ -48,6 +48,7 @@ backend/models/registry.json
 *.h5
 *.pb
 *.pkl
+*.npz
 *.joblib
 *.safetensors
 *.ckpt

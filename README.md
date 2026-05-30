@@ -174,6 +174,7 @@ MyWeb1/
 │   │   ├── clustering_routes.py
 │   │   └── llm_routes.py        # SSE 流式聊天
 │   ├── services/                # 业务逻辑层（从 Streamlit 抽出的核心计算）
+│   │   ├── _safe_serialize.py     # 安全序列化：np.savez + RestrictedUnpickler 替代 pickle
 │   │   ├── data_service.py
 │   │   ├── regression_service.py
 │   │   ├── classification_service.py
@@ -268,8 +269,8 @@ MyWeb1/
 - **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启
 - **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；Agent 模式下工具执行均在服务端完成，LLM 不直接访问数据文件
 - **文件上传**：256MB 硬限制，防止内存耗尽
-- **Session 存储**：Parquet + JSON 替代 pickle，消除反序列化代码执行风险
-- **模型加载**：sklearn Pipeline / KMeans 加载时进行类型验证
+- **Session 存储**：Parquet + JSON 替代 pickle，旧 `.pkl` session 通过 `RestrictedUnpickler`（模块白名单）安全迁移后删除
+- **模型序列化**：StandardScaler / KMeans 参数用 `np.savez` 保存（`.npz` 格式，零代码执行）；DecisionTree Pipeline 等复杂对象经 `RestrictedUnpickler` 加载，仅允许 sklearn/numpy/pandas/pyarrow 模块
 - **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围，失败时返回结构化中文错误
 
 ## 开发者

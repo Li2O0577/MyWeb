@@ -49,7 +49,7 @@ if ($pycacheDirs.Count -gt 0) {
 
 # ── 2. Trained model files ──
 Write-Step "[2/6] Scanning trained model files..."
-$modelPatterns = @("*.pth", "*.pt", "*.onnx", "*.h5", "*.pb", "*.pkl", "*.joblib", "*.safetensors", "*.ckpt", "*.bin", "*.sav")
+$modelPatterns = @("*.pth", "*.pt", "*.onnx", "*.h5", "*.pb", "*.pkl", "*.npz", "*.joblib", "*.safetensors", "*.ckpt", "*.bin", "*.sav")
 $modelFiles = @()
 foreach ($pattern in $modelPatterns) {
     $found = @(Get-ChildItem -Path $scriptDir -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue | Where-Object {
