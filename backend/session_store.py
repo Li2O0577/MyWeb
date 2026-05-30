@@ -129,10 +129,10 @@ def _delete_from_disk(sid):
 def _migrate_legacy_pickle(sid):
     """Attempt to load an old .pkl session and migrate it to Parquet + JSON.
 
-    Once the pickle has been migrated it is deleted so the unsafe payload
-    is gone from disk.  If the pickle is unreadable it is discarded.
+    Loaded via RestrictedUnpickler so only sklearn/numpy/pandas types are
+    allowed during deserialization.  Once migrated the pickle is deleted.
     """
-    import pickle
+    from services._safe_serialize import RestrictedUnpickler
 
     legacy_path = os.path.join(SESSIONS_DIR, f"{sid}.pkl")
     if not os.path.exists(legacy_path):
@@ -140,7 +140,7 @@ def _migrate_legacy_pickle(sid):
 
     try:
         with open(legacy_path, "rb") as f:
-            raw = pickle.load(f)
+            raw = RestrictedUnpickler(f).load()
     except Exception:
         # Corrupt or malicious pickle — discard
         try:
@@ -258,16 +258,17 @@ def update_session(sid, df, source_name=None):
             _save_to_disk(sid, record)
             return True
 
-    disk_data = _load_from_disk(sid)
-    if disk_data:
-        created_at = disk_data["meta"].get("created_at", disk_data.get("at", now))
-        source = source_name or disk_data["meta"].get("source_name")
-        record = {"df": df, "at": now, "meta": _build_meta(df, source, created_at, now)}
-        record["meta"]["session_id"] = sid
-        with _sessions_lock:
+        # Not in memory — load from disk inside the lock to avoid TOCTOU
+        # between the disk read and the memory write.
+        disk_data = _load_from_disk(sid)
+        if disk_data:
+            created_at = disk_data["meta"].get("created_at", disk_data.get("at", now))
+            source = source_name or disk_data["meta"].get("source_name")
+            record = {"df": df, "at": now, "meta": _build_meta(df, source, created_at, now)}
+            record["meta"]["session_id"] = sid
             _sessions[sid] = record
-        _save_to_disk(sid, record)
-        return True
+            _save_to_disk(sid, record)
+            return True
     return False
 
 

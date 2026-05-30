@@ -13,6 +13,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix, r2_score, mean_abs
 from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
 )
+from services._safe_serialize import safe_load_pickle
 
 
 def train(df, target_col, feature_cols, task_type, criterion, max_depth,
@@ -142,27 +143,21 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
 
 def _safe_load_pickle(path):
     """Load a pickle file with type validation for sklearn models."""
-    import pickle
     from sklearn.pipeline import Pipeline
-
-    with open(path, 'rb') as f:
-        obj = pickle.load(f)
-    if not isinstance(obj, Pipeline):
-        raise TypeError(f"Expected sklearn Pipeline, got {type(obj).__name__}")
-    return obj
+    return safe_load_pickle(path, Pipeline)
 
 
 def predict_one(input_dict, task_type, version_id=None):
-    """Single prediction. Returns predicted value/class."""
+    """Single prediction. Returns (result, None) or (None, (code, message))."""
     import pandas as pd
     paths, meta = get_model_paths("decision_tree", version_id)
     if not paths:
-        return None, "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。"
+        return None, ("MODEL_NOT_FOUND", "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。")
 
     model_task = meta.get("params", {}).get("task_type") if meta else None
     if model_task and model_task != task_type:
         task_names = {"classification": "分类", "regression": "回归"}
-        return None, (
+        return None, ("TASK_MISMATCH",
             f"当前决策树版本是{task_names.get(model_task, model_task)}模型，"
             f"但本次请求按{task_names.get(task_type, task_type)}任务预测。"
             "请切换到匹配的模型版本，或重新训练当前任务。"

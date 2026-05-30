@@ -93,8 +93,8 @@ def render_device_selector():
     device_choice = st.selectbox("选择运行设备", ["CPU", "CUDA (GPU)"], index=0)
     if device_choice == "CUDA (GPU)":
         if not torch.cuda.is_available():
-            st.toast("❌ 设备选择错误：当前环境未安装 CUDA/GPU，无法使用 CUDA！请切换为 CPU", icon="❌")
-            st.stop()
+            st.warning("当前环境未安装 CUDA/GPU，已自动切换为 CPU。如需使用 GPU，请安装 CUDA 版 PyTorch。")
+            return torch.device("cpu")
         device = torch.device("cuda")
         st.success("✅ 已启用：CUDA GPU")
     else:

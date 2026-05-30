@@ -87,12 +87,12 @@ def register_version(model_type, version_id, metadata, files):
 
 def activate_version(model_type, version_id):
     """Set a version as active. Returns True on success."""
-    reg = get_registry()
-    if version_id not in reg.get(model_type, {}).get("versions", {}):
-        return False
-
-    reg[model_type]["active"] = version_id
     with _lock:
+        reg = _read_registry()
+        if version_id not in reg.get(model_type, {}).get("versions", {}):
+            return False
+
+        reg[model_type]["active"] = version_id
         _write_registry(reg)
     return True
 
@@ -112,9 +112,12 @@ def delete_version(model_type, version_id):
 
         del versions[version_id]
 
-        # If we deleted the active version, pick the newest remaining
+        # If we deleted the active version, pick the newest remaining by created_at
         if reg[model_type]["active"] == version_id:
-            remaining = list(versions.keys())
+            remaining = sorted(
+                versions.keys(),
+                key=lambda vid: versions[vid].get("created_at", ""),
+            )
             reg[model_type]["active"] = remaining[-1] if remaining else None
 
         _write_registry(reg)
@@ -130,6 +133,40 @@ def create_version_dir(model_type, version_id):
 
 def generate_version_id():
     return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+
+
+def _convert_legacy_scaler_pkl(old_path, new_path):
+    """Convert an old pickle-format StandardScaler to safe .npz format.
+
+    Uses RestrictedUnpickler (not vanilla pickle.load) so the conversion
+    itself doesn't reintroduce the deserialization risk.  The old .pkl file
+    is removed after a successful conversion.
+    """
+    import logging
+    import numpy as np
+    from services._safe_serialize import RestrictedUnpickler
+
+    _log = logging.getLogger(__name__)
+    try:
+        with open(old_path, "rb") as f:
+            scaler = RestrictedUnpickler(f).load()
+        np.savez(
+            new_path,
+            mean=scaler.mean_,
+            scale=scaler.scale_,
+            var=scaler.var_,
+            n_features_in=scaler.n_features_in_,
+            n_samples_seen=scaler.n_samples_seen_,
+        )
+    except Exception:
+        _log.warning("Legacy scaler conversion failed for %s — skipping", old_path)
+        return
+
+    # Remove the old pickle file now that the safe copy exists
+    try:
+        os.remove(old_path)
+    except OSError:
+        pass
 
 
 def migrate_legacy_files(model_type, legacy_files):
@@ -162,9 +199,20 @@ def migrate_legacy_files(model_type, legacy_files):
     new_files = {}
     for role, old_name in legacy_files.items():
         old_path = os.path.join(MODELS_DIR, old_name)
-        new_name = os.path.basename(old_name)
-        new_path = os.path.join(vdir, new_name)
-        if os.path.exists(old_path):
+        if not os.path.exists(old_path):
+            continue
+        if role == "scaler" and old_name.endswith(".pkl"):
+            # Convert legacy pickle scaler → safe .npz format
+            new_name = old_name[:-4] + ".npz"
+            new_path = os.path.join(vdir, new_name)
+            _convert_legacy_scaler_pkl(old_path, new_path)
+            if os.path.exists(new_path):
+                new_files[role] = new_name
+            # If conversion failed, the scaler role is omitted — the version
+            # will lack a scaler and load attempts will produce a clear error.
+        else:
+            new_name = os.path.basename(old_name)
+            new_path = os.path.join(vdir, new_name)
             shutil.copy2(old_path, new_path)
             new_files[role] = new_name
 
@@ -267,9 +315,12 @@ def cleanup_orphaned_versions():
             del versions[vid]
             changed = True
 
-        # If the active version was orphaned, pick the newest remaining
+        # If the active version was orphaned, pick the newest remaining by created_at
         if reg[model_type].get("active") in orphaned:
-            remaining = list(versions.keys())
+            remaining = sorted(
+                versions.keys(),
+                key=lambda vid: versions[vid].get("created_at", ""),
+            )
             reg[model_type]["active"] = remaining[-1] if remaining else None
 
     if changed:

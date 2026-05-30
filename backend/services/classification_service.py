@@ -1,7 +1,6 @@
 """PyTorch MLP classification training & prediction."""
 import os
 import copy
-import pickle
 import json
 import numpy as np
 import torch
@@ -15,6 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
 )
+from services._safe_serialize import save_scaler, load_scaler
 
 
 class ClassificationNet(nn.Module):
@@ -151,12 +151,11 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     vdir = create_version_dir("classification", version_id)
 
     model_path = os.path.join(vdir, "model.pth")
-    scaler_path = os.path.join(vdir, "scaler.pkl")
+    scaler_path = os.path.join(vdir, "scaler.npz")
     config_path = os.path.join(vdir, "config.json")
 
     torch.save(model.state_dict(), model_path)
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
+    save_scaler(scaler, scaler_path)
 
     config_dict = {
         "features": [str(c) for c in feature_cols],
@@ -180,7 +179,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
         "params": {"hidden1": hidden1, "hidden2": hidden2, "dropout_rate": dropout_rate,
                    "learning_rate": learning_rate, "epochs": epochs, "batch_size": batch_size,
                    "n_classes": n_classes},
-    }, {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"})
+    }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
 
     return {
         "acc": acc, "cm": cm, "label_names": label_names,
@@ -199,8 +198,7 @@ def _load_model(device, version_id=None):
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)
-    with open(paths["scaler"], 'rb') as f:
-        scaler = pickle.load(f)
+    scaler = load_scaler(paths["scaler"])
 
     n_classes = config["n_classes"]
     n_features = len(config["features"])

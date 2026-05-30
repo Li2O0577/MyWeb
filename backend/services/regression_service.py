@@ -1,7 +1,6 @@
 """PyTorch MLP regression training & prediction."""
 import os
 import copy
-import pickle
 import json
 import numpy as np
 import torch
@@ -16,6 +15,7 @@ from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
     get_active_version
 )
+from services._safe_serialize import save_scaler, load_scaler
 
 
 class RegressionNet(nn.Module):
@@ -116,16 +116,15 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     vdir = create_version_dir("regression", version_id)
 
     model_path = os.path.join(vdir, "model.pth")
-    scaler_path = os.path.join(vdir, "scaler.pkl")
+    scaler_path = os.path.join(vdir, "scaler.npz")
     config_path = os.path.join(vdir, "config.json")
 
     torch.save(model.state_dict(), model_path)
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
+    save_scaler(scaler, scaler_path)
 
     config_dict = {
-        "features": feature_cols,
-        "target": target_col,
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
         "hidden1": hidden1,
         "hidden2": hidden2,
         "dropout_rate": dropout_rate,
@@ -137,12 +136,12 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     register_version("regression", version_id, {
         "dataset_name": dataset_name,
         "session_id": session_id,
-        "features": feature_cols,
-        "target": target_col,
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
         "metrics": {"r2": r2, "mae": mae, "rmse": rmse},
         "params": {"hidden1": hidden1, "hidden2": hidden2, "dropout_rate": dropout_rate,
                    "learning_rate": learning_rate, "epochs": epochs, "batch_size": batch_size},
-    }, {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"})
+    }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
 
     return {"r2": r2, "mae": mae, "rmse": rmse,
             "train_losses": train_losses, "val_losses": val_losses,
@@ -157,8 +156,7 @@ def _load_model(device, version_id=None):
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)
-    with open(paths["scaler"], 'rb') as f:
-        scaler = pickle.load(f)
+    scaler = load_scaler(paths["scaler"])
 
     n_features = len(config["features"])
     h1 = config.get("hidden1", max(8, n_features))

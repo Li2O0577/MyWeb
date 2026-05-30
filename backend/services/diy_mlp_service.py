@@ -1,7 +1,6 @@
 """Custom MLP training & prediction (regression + classification)."""
 import os
 import copy
-import pickle
 import json
 import numpy as np
 import torch
@@ -15,6 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
 )
+from services._safe_serialize import save_scaler, load_scaler
 
 ACT_FNS = {
     "ReLU": nn.ReLU, "LeakyReLU": lambda: nn.LeakyReLU(0.1), "GELU": nn.GELU,
@@ -194,12 +194,12 @@ def train(df, target_col, feature_cols, layers_config,
     vdir = create_version_dir("diy_mlp", version_id)
 
     model_path = os.path.join(vdir, "model.pth")
-    scaler_path = os.path.join(vdir, "scaler.pkl")
+    scaler_path = os.path.join(vdir, "scaler.npz")
     config_path = os.path.join(vdir, "config.json")
 
     config_dict = {
-        "features": feature_cols,
-        "target": target_col,
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
         "task": task_type,
         "layers": layers_config,
     }
@@ -209,8 +209,7 @@ def train(df, target_col, feature_cols, layers_config,
         config_dict["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
 
     torch.save(model.state_dict(), model_path)
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
+    save_scaler(scaler, scaler_path)
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config_dict, f, ensure_ascii=False)
 
@@ -228,11 +227,11 @@ def train(df, target_col, feature_cols, layers_config,
     register_version("diy_mlp", version_id, {
         "dataset_name": dataset_name,
         "session_id": session_id,
-        "features": feature_cols,
-        "target": target_col,
+        "features": [str(c) for c in feature_cols],
+        "target": str(target_col),
         "metrics": metrics,
         "params": params,
-    }, {"model": "model.pth", "scaler": "scaler.pkl", "config": "config.json"})
+    }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
 
     if is_cls:
         result["n_classes"] = n_classes
@@ -250,8 +249,7 @@ def _load_model(device, version_id=None):
 
     with open(paths["config"], 'r') as f:
         config = json.load(f)
-    with open(paths["scaler"], 'rb') as f:
-        scaler = pickle.load(f)
+    scaler = load_scaler(paths["scaler"])
 
     output_dim = 1 if config["task"] == "regression" or config.get("n_classes") == 2 else config.get("n_classes", 1)
     model = DynamicMLP(len(config["features"]), config["layers"], output_dim).to(device)

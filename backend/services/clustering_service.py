@@ -1,6 +1,5 @@
 """Clustering (K-means & DBSCAN) training & prediction."""
 import os
-import pickle
 import json
 import numpy as np
 from sklearn.cluster import KMeans, DBSCAN
@@ -10,6 +9,11 @@ from sklearn.decomposition import PCA
 
 from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
+)
+from services._safe_serialize import (
+    save_scaler, load_scaler,
+    save_kmeans, load_kmeans,
+    safe_load_pickle,
 )
 
 
@@ -71,14 +75,23 @@ def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
     version_id = generate_version_id()
     vdir = create_version_dir("clustering", version_id)
 
-    model_path = os.path.join(vdir, "model.pkl")
-    scaler_path = os.path.join(vdir, "scaler.pkl")
+    # KMeans → safe .npz, DBSCAN → restricted pickle
+    if algorithm == "kmeans":
+        model_name = "model.npz"
+        model_path = os.path.join(vdir, model_name)
+        save_kmeans(model, model_path)
+    else:
+        model_name = "model.pkl"
+        model_path = os.path.join(vdir, model_name)
+        with open(model_path, "wb") as f:
+            import pickle
+            pickle.dump(model, f)
+
+    scaler_name = "scaler.npz"
+    scaler_path = os.path.join(vdir, scaler_name)
     config_path = os.path.join(vdir, "config.json")
 
-    with open(model_path, 'wb') as f:
-        pickle.dump(model, f)
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
+    save_scaler(scaler, scaler_path)
 
     config_dict = {
         "features": [str(c) for c in feature_cols],
@@ -96,7 +109,7 @@ def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
         "target": "",
         "metrics": {"silhouette": sil, "n_clusters": n_found},
         "params": {"algorithm": algorithm, "params": params},
-    }, {"model": "model.pkl", "scaler": "scaler.pkl", "config": "config.json"})
+    }, {"model": model_name, "scaler": scaler_name, "config": "config.json"})
 
     return {
         "labels": labels, "cluster_counts": cluster_counts, "n_found": n_found,
@@ -107,11 +120,12 @@ def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
 
 def elbow(df, feature_cols, max_k):
     """Compute inertia for K values 1..max_k. Capped at n_samples-1."""
-    X = df[feature_cols].values
+    df_clean = df[feature_cols].dropna()
+    X = df_clean.values
     n = len(X)
     max_valid = min(max_k, n - 1)
     if max_valid < 2:
-        return {"ks": [], "inertias": [], "warning": "数据量不足以计算肘部法则（至少需要 3 行数据）"}
+        return {"ks": [], "inertias": [], "warning": "数据量不足以计算肘部法则（至少需要 3 行有效数据）"}
     capped = max_valid < max_k
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -128,21 +142,8 @@ def elbow(df, feature_cols, max_k):
     return result
 
 
-def _safe_load_pickle(path, expected_type):
-    """Load a pickle file with type validation."""
-    import pickle
-    with open(path, 'rb') as f:
-        obj = pickle.load(f)
-    if not isinstance(obj, expected_type):
-        raise TypeError(f"Expected {expected_type.__name__}, got {type(obj).__name__}")
-    return obj
-
-
 def predict_one(feature_values, version_id=None):
     """Predict cluster for a new data point (K-means only)."""
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
-
     paths, meta = get_model_paths("clustering", version_id)
     if not paths:
         return None, "没有找到已保存的聚类模型，请先训练模型或切换到有效版本。"
@@ -152,8 +153,13 @@ def predict_one(feature_values, version_id=None):
     if config.get("algorithm") != "kmeans":
         return None, "Only K-means supports prediction."
 
-    model = _safe_load_pickle(paths["model"], KMeans)
-    scaler = _safe_load_pickle(paths["scaler"], StandardScaler)
+    model_path = paths.get("model", "")
+    if model_path.endswith(".npz"):
+        model = load_kmeans(model_path)
+    else:
+        # Legacy DBSCAN model saved as pickle — load via restricted unpickler
+        model = safe_load_pickle(model_path, KMeans)
+    scaler = load_scaler(paths["scaler"])
 
     input_arr = np.array([feature_values])
     input_scaled = scaler.transform(input_arr)

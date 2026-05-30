@@ -326,7 +326,7 @@ def _sanitize_tool_args(tool_name, args, df):
         target = args.get("target_column", "")
         return {
             "target_column": target if target in df.columns else "",
-            "epochs": _safe_int(args.get("epochs", 120), 120, 50, 200),
+            "epochs": _safe_int(args.get("epochs", 120), 120, 50, 500),
             "learning_rate": _safe_float(args.get("learning_rate", 0.001), 0.001, 1e-5, 0.05),
         }
 

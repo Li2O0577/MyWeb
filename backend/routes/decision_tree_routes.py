@@ -57,9 +57,12 @@ def predict():
     result, err = predict_one(data["input_dict"], data["task_type"],
                               version_id=data.get("version_id"))
     if err:
-        code = "MODEL_NOT_FOUND" if "没有找到已保存" in err else "PREDICTION_FAILED"
+        if isinstance(err, tuple):
+            code, msg = err
+        else:
+            code, msg = "PREDICTION_FAILED", err
         status = 404 if code == "MODEL_NOT_FOUND" else 400
-        return service_error(code, err, status)
+        return service_error(code, msg, status)
     return jsonify(result)
 
 
