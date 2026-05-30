@@ -128,6 +128,7 @@ $checks = @(
     @{Module="numpy"; Desc="numpy"},
     @{Module="sklearn"; Desc="scikit-learn"},
     @{Module="plotly"; Desc="plotly"},
+    @{Module="matplotlib"; Desc="matplotlib"},
     @{Module="requests"; Desc="requests"},
     @{Module="openpyxl"; Desc="openpyxl"},
     @{Module="pyarrow"; Desc="PyArrow"},

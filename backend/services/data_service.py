@@ -14,27 +14,129 @@ def parse_file(file_bytes, filename):
         raise ValueError(f"不支持的文件格式: {filename}。请上传 CSV (.csv) 或 Excel (.xlsx) 文件。")
 
 
-def detect_outliers(df):
-    """IQR-based outlier detection. Returns {col: {count, indices, values, lower_bound, upper_bound}}."""
+def _mad_outliers(series, coefficient=1.5):
+    """MAD-based outlier detection. Fallback when IQR == 0.
+
+    Returns (mask, lower_bound, upper_bound, method_label).
+    Uses modified Z-score with MAD scaling factor 0.6745.
+    If MAD is also zero, falls back to standard deviation.
+    """
+    median = series.median()
+    mad = np.median(np.abs(series - median))
+
+    if mad == 0 or np.isnan(mad):
+        # MAD is zero: most values are identical. Last resort: standard deviation.
+        std = series.std()
+        if std == 0 or np.isnan(std) or len(series) < 4:
+            # Truly constant column or too small: flag everything != median as "outlier"
+            mask = series != median
+            if mask.sum() == 0:
+                return pd.Series(False, index=series.index), None, None, "none"
+            # Use a small epsilon to define bounds around the median
+            eps = max(1e-8, np.finfo(np.float64).eps * abs(median) * 10)
+            lower_bound = round(float(median) - eps, 4)
+            upper_bound = round(float(median) + eps, 4)
+            return mask, lower_bound, upper_bound, "std"
+        # Std is non-zero: use 2.5 std threshold (wider than usual since std is inflated by outliers)
+        threshold = 2.5 if coefficient <= 1.5 else 4.0
+        lower_bound = round(median - threshold * std, 4)
+        upper_bound = round(median + threshold * std, 4)
+        mask = (series < lower_bound) | (series > upper_bound)
+        return mask, lower_bound, upper_bound, "std"
+
+    # 0.6745 * (x - median) / mad ~ N(0, 1) for normal data
+    # Use 3.5 as threshold -> roughly equivalent to IQR * 1.5 in terms of false positive rate
+    threshold = 3.5 if coefficient <= 1.5 else 5.0
+    modified_z = 0.6745 * (series - median) / mad
+    mask = modified_z.abs() > threshold
+    lower_bound = round(median - threshold * mad / 0.6745, 4)
+    upper_bound = round(median + threshold * mad / 0.6745, 4)
+    return mask, lower_bound, upper_bound, "mad"
+
+
+def detect_outliers(df, coefficient=1.5):
+    """Detect outliers in numeric columns.
+
+    Uses IQR (Q1 - coeff*IQR, Q3 + coeff*IQR) as primary method.
+    Falls back to MAD when IQR == 0. NaN values are counted but excluded from detection.
+
+    Args:
+        df: pandas DataFrame
+        coefficient: IQR multiplier (1.5 = standard, 3.0 = extreme)
+
+    Returns:
+        {col_name: {
+            count, indices, values, severities, directions,
+            lower_bound, upper_bound, nan_count, method
+        }}
+    """
+    if coefficient <= 0:
+        coefficient = 1.5
     outliers = {}
     numeric_cols = df.select_dtypes(include=[np.number]).columns
+
     for col in numeric_cols:
-        q1 = df[col].quantile(0.25)
-        q3 = df[col].quantile(0.75)
+        # Drop NaN for detection, but count and report them
+        col_series = df[col]
+        valid = col_series.dropna()
+        nan_count = int(col_series.isna().sum())
+
+        if len(valid) < 4:
+            continue  # too few values to detect outliers meaningfully
+
+        q1 = valid.quantile(0.25)
+        q3 = valid.quantile(0.75)
         iqr = q3 - q1
+        method = "iqr"
+
         if iqr == 0:
-            continue
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        mask = (df[col] < lower) | (df[col] > upper)
-        if mask.any():
+            # Fallback to MAD
+            mask, lower, upper, method = _mad_outliers(valid, coefficient)
+            if method == "none":
+                if nan_count > 0:
+                    outliers[col] = {
+                        "count": 0, "indices": [], "values": [],
+                        "severities": [], "directions": [],
+                        "lower_bound": None, "upper_bound": None,
+                        "nan_count": nan_count, "method": "none"
+                    }
+                continue
+        else:
+            lower = q1 - coefficient * iqr
+            upper = q3 + coefficient * iqr
+            mask = (valid < lower) | (valid > upper)
+
+        outlier_count = int(mask.sum())
+        if outlier_count > 0 or nan_count > 0:
+            outlier_indices = valid.index[mask].tolist()
+            outlier_values = valid.loc[mask].tolist()
+
+            # Compute severity: how far beyond the fence relative to the acceptable range width.
+            # A severity of 1.0 means "as far out as the entire acceptable range is wide."
+            fence_width = upper - lower
+            scale = max(fence_width, 1e-10)
+            severities = []
+            directions = []
+            for val in outlier_values:
+                if val > upper:
+                    severities.append(round((val - upper) / scale, 2))
+                    directions.append("high")
+                else:
+                    severities.append(round((lower - val) / scale, 2))
+                    directions.append("low")
+
             outliers[col] = {
-                "count": int(mask.sum()),
-                "indices": df.index[mask].tolist(),
-                "values": df.loc[mask, col].tolist(),
+                "count": outlier_count,
+                "indices": outlier_indices,
+                "values": outlier_values,
+                "severities": severities,
+                "directions": directions,
                 "lower_bound": round(lower, 4),
                 "upper_bound": round(upper, 4),
+                "nan_count": nan_count,
+                "method": method,
             }
+
     return outliers
 
 

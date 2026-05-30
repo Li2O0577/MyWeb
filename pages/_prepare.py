@@ -16,10 +16,32 @@ def hide_native_sidebar():
     """, unsafe_allow_html=True)
 
 
+def _outlier_warning(outlier_info):
+    """Build a unified warning message from outlier detection results."""
+    total_outliers = sum(v.get("count", 0) for v in outlier_info.values())
+    total_nans = sum(v.get("nan_count", 0) for v in outlier_info.values())
+    n_cols_outlier = sum(1 for v in outlier_info.values() if v.get("count", 0) > 0)
+    n_cols_nan = sum(1 for v in outlier_info.values() if v.get("nan_count", 0) > 0)
+
+    parts = []
+    if total_outliers > 0:
+        parts.append(f"**{total_outliers}** 个异常值（{n_cols_outlier} 列）")
+    if total_nans > 0:
+        parts.append(f"**{total_nans}** 个缺失值（{n_cols_nan} 列）")
+    if not parts:
+        return
+
+    msg = "⚠️ 检测到 " + "，".join(parts)
+    msg += "。建议前往 **📊 数据加载** 页面查看详情并进行处理。"
+    st.warning(msg)
+
+
 def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True):
     """Data upload component. If upload_to_backend=True, also sends file to Flask."""
     if "original_df" not in st.session_state:
         st.session_state.original_df = None
+    if "outlier_coefficient" not in st.session_state:
+        st.session_state.outlier_coefficient = 1.5
 
     st.subheader("📂 数据导入")
     uploaded_file = st.file_uploader("上传 CSV/Excel", type=["csv", "xlsx"], key="global_uploader")
@@ -62,7 +84,7 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                         df = df.drop(columns=to_drop)
 
                 # 2. Store df locally FIRST — data is immediately available to all pages
-                outlier_info = detect_outliers(df)
+                outlier_info = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
                 st.session_state.outliers = outlier_info
                 st.session_state['main_df'] = df
                 st.session_state._data_loaded = True
@@ -73,12 +95,7 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                     try_upload_backend(raw_bytes, uploaded_file.name)
 
                 if warn_outliers and outlier_info:
-                    total = sum(v["count"] for v in outlier_info.values())
-                    cols = len(outlier_info)
-                    st.warning(
-                        f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                        f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
-                    )
+                    _outlier_warning(outlier_info)
 
                 return df
 
@@ -88,31 +105,18 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
 
         if 'main_df' in st.session_state:
             df = st.session_state['main_df']
-            # Re-detect outliers after data was cleaned (indices/bounds may have changed)
             if force_cached or 'outliers' not in st.session_state:
-                st.session_state.outliers = detect_outliers(df)
-            outlier_info = st.session_state.outliers
-            if warn_outliers and outlier_info:
-                total = sum(v["count"] for v in outlier_info.values())
-                cols = len(outlier_info)
-                st.warning(
-                    f"⚠️ 检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                    f"建议前往 **📊 数据加载** 页面查看详情并进行处理。"
-                )
+                st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
+            if warn_outliers:
+                _outlier_warning(st.session_state.outliers)
             return df
 
     if 'main_df' in st.session_state:
         df = st.session_state['main_df']
-        # Always re-detect — main_df may have changed columns (e.g. PCA in processing page)
-        st.session_state.outliers = detect_outliers(df)
-        outlier_info = st.session_state.outliers
-        if warn_outliers and outlier_info:
-            total = sum(v["count"] for v in outlier_info.values())
-            cols = len(outlier_info)
-            st.warning(
-                f"检测到 **{total}** 个异常值，分布在 **{cols}** 个列中。"
-                f"建议前往 **数据加载** 页面查看详情并进行处理。"
-            )
+        if 'outliers' not in st.session_state:
+            st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
+        if warn_outliers:
+            _outlier_warning(st.session_state.outliers)
         return df
 
     return None

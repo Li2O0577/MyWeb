@@ -38,7 +38,7 @@ def upload():
         meta = get_session_meta(sid)
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
-        outliers = detect_outliers(df)
+        outliers = detect_outliers(df, coefficient=1.5)
         return jsonify({
             "session_id": sid,
             "session_meta": meta,
@@ -61,7 +61,7 @@ def get_outliers(sid):
     df = get_session(sid)
     if df is None:
         return session_expired()
-    outliers = detect_outliers(df)
+    outliers = detect_outliers(df, coefficient=1.5)
     return jsonify({"outliers": {str(k): v for k, v in outliers.items()}})
 
 

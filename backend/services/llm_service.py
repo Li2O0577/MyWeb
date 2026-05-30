@@ -303,6 +303,61 @@ TOOLS = [
                 }
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_chart",
+            "description": "创建数据可视化图表（matplotlib）并返回图片内嵌在对话中。支持散点图、折线图、柱状图、直方图、箱线图、相关性热力图、饼图、配对关系图。图表会自动显示在对话中供用户查看。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["scatter", "line", "bar", "histogram", "box", "heatmap", "pie", "pairplot"],
+                        "description": "图表类型：scatter=散点图, line=折线图, bar=柱状图, histogram=直方图, box=箱线图, heatmap=相关性热力图, pie=饼图, pairplot=成对关系图"
+                    },
+                    "x_column": {
+                        "type": "string",
+                        "description": "X轴列名。对于 heatmap/pairplot 可选，其他类型必填"
+                    },
+                    "y_column": {
+                        "type": "string",
+                        "description": "Y轴列名。histogram/pie/pairplot/heatmap 不需要"
+                    },
+                    "color_column": {
+                        "type": "string",
+                        "description": "颜色分组列名（可选），用于按该列的值着色不同数据点"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "图表标题，默认自动生成"
+                    }
+                },
+                "required": ["chart_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_code_interpreter",
+            "description": "编写并执行 Python 代码进行自定义数据分析和可视化。代码在隔离子进程中运行（30秒超时），支持 numpy/pandas/matplotlib/scipy/sklearn。数据集通过 df 变量自动注入，matplotlib 图表自动捕获并内嵌显示。适合做复杂的数据探索、统计检验、自定义可视化等。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "要执行的 Python 代码。df 变量已自动注入（当前数据集）。已自动导入：numpy(np), pandas(pd), matplotlib.pyplot(plt), scipy.stats(stats), sklearn。plt.show() 或 plt.savefig() 会自动捕获图表。print() 输出会显示在对话中。代码限制 10000 字符。"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "简要描述这段代码要做什么（5-15字），用于日志和进度显示"
+                    }
+                },
+                "required": ["code"]
+            }
+        }
     }
 ]
 
@@ -344,6 +399,30 @@ def _sanitize_tool_args(tool_name, args, df):
     if tool_name == "run_correlation_analysis":
         return {"top_n": _safe_int(args.get("top_n", 10), 10, 3, 30)}
 
+    if tool_name == "generate_chart":
+        chart_type = args.get("chart_type", "scatter")
+        if chart_type not in {"scatter", "line", "bar", "histogram", "box", "heatmap", "pie", "pairplot"}:
+            chart_type = "scatter"
+        x_col = args.get("x_column", "")
+        y_col = args.get("y_column", "")
+        color_col = args.get("color_column", "")
+        return {
+            "chart_type": chart_type,
+            "x_column": x_col if x_col in df.columns else "",
+            "y_column": y_col if y_col in df.columns else "",
+            "color_column": color_col if color_col in df.columns else "",
+            "title": str(args.get("title", ""))[:100]
+        }
+
+    if tool_name == "run_code_interpreter":
+        code = args.get("code", "")
+        if not isinstance(code, str) or not code.strip():
+            return {"code": "", "description": ""}
+        if len(code) > 10000:
+            code = code[:10000]
+        desc = str(args.get("description", ""))[:80]
+        return {"code": code, "description": desc}
+
     return args
 
 
@@ -359,7 +438,7 @@ def _build_system_prompt(df):
         tinfo = t["function"]
         tool_descriptions.append(f"- **{tinfo['name']}**: {tinfo['description']}")
 
-    return f"""你是本数据分析平台内置的 AI 分析师。你**有实际操作能力**——可以调用工具来执行分析，而不只是给建议。
+    return f"""你是本数据分析平台内置的 AI 分析师。你**有实际操作能力**——可以调用工具来执行分析、绘制图表、编写代码，而不只是给建议。
 
 ## 当前数据集
 - 行数: {len(df)}, 列数: {len(df.columns)}
@@ -373,23 +452,369 @@ def _build_system_prompt(df):
 ## 分析策略
 1. 首先调用 `get_data_overview` 了解数据的统计特征和相关性
 2. 根据数据特征和目标选择合适的分析方法：
+   - 如果需要**可视化数据分布/关系** → 优先使用 `generate_chart` 创建直观的图表（散点图、直方图、热力图等）
+   - 如果需要**复杂的自定义分析**或现有工具无法满足需求 → 使用 `run_code_interpreter` 编写 Python 代码
    - 如果需要预测连续值 → `run_regression`
    - 如果需要预测分类标签 → `run_classification`
    - 如果探索数据结构和分组 → `run_clustering`
    - 如果发现强相关 → 用 `run_correlation_analysis` 深入分析
-3. 综合所有工具返回的结果，给出具体的、有数据支撑的结论
-4. 如果某个工具执行失败，分析原因并尝试调整参数
+3. **重要：分析结论中配合可视化** — 在给出数据统计后，主动用 `generate_chart` 生成图表让用户直观感受数据特征
+4. 综合所有工具返回的结果，给出具体的、有数据支撑的结论
+5. 如果某个工具执行失败，分析原因并尝试调整参数
 
 ## 规则
 - 必须实际调用工具来推进分析，**不要只给文字建议**
 - 每次回复至少调用一个工具
+- **主动画图** — 数据探索阶段至少生成 1-2 张图表（分布直方图、相关性热力图、散点图等）
 - 分析完一个方向后，考虑是否需要从另一个角度继续
 - 模型训练完成后，解释指标的含义（R² 越接近 1 越好，MAE/RMSE 越小越好等）
 - 用中文回复，输出清晰有层次的 Markdown 分析报告"""
 
 
+def _make_result(text="", images=None):
+    """Build a structured tool result."""
+    return {"text": text, "images": images or []}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Chart Generation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fig_to_base64(fig):
+    """Convert a matplotlib figure to base64 PNG string."""
+    import io
+    import base64
+    import matplotlib.pyplot as _plt
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    _plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('utf-8')
+
+
+def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
+    """Generate a matplotlib chart and return a structured result with base64 image."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
+
+    try:
+        if chart_type == "scatter":
+            if not x_column or not y_column:
+                return _make_result(text="散点图需要同时指定 x_column 和 y_column。")
+            if x_column not in df.columns or y_column not in df.columns:
+                return _make_result(text=f"列不存在。可用列: {', '.join(str(c) for c in df.columns)}")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            if color_column and color_column in df.columns:
+                unique_vals = df[color_column].dropna().unique()
+                if len(unique_vals) > 20:
+                    top_vals = df[color_column].value_counts().head(20).index
+                    for label in top_vals:
+                        mask = df[color_column] == label
+                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=str(label), s=20)
+                    ax.legend(fontsize=7, title=f"{color_column} (top 20)")
+                else:
+                    for label in unique_vals:
+                        mask = df[color_column] == label
+                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=str(label), s=20)
+                    ax.legend(fontsize=8, title=color_column)
+            else:
+                ax.scatter(df[x_column], df[y_column], alpha=0.6, s=20)
+            ax.set_xlabel(x_column); ax.set_ylabel(y_column)
+            ax.set_title(title or f"{y_column} vs {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成散点图：**{y_column}** vs **{x_column}**" + (f"，按 {color_column} 着色" if color_column else ""),
+                images=[{"base64": b64, "title": title or f"{y_column} vs {x_column}", "alt": "scatter plot"}]
+            )
+
+        elif chart_type == "line":
+            if not x_column or not y_column:
+                return _make_result(text="折线图需要同时指定 x_column 和 y_column。")
+            if x_column not in df.columns or y_column not in df.columns:
+                return _make_result(text=f"列不存在。可用列: {', '.join(str(c) for c in df.columns)}")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            data = df[[x_column, y_column]].dropna().sort_values(x_column)
+            ax.plot(data[x_column], data[y_column], linewidth=1.5)
+            ax.set_xlabel(x_column); ax.set_ylabel(y_column)
+            ax.set_title(title or f"{y_column} vs {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成折线图：**{y_column}** vs **{x_column}**",
+                images=[{"base64": b64, "title": title or f"{y_column} vs {x_column}", "alt": "line chart"}]
+            )
+
+        elif chart_type == "bar":
+            if not x_column:
+                return _make_result(text="柱状图需要指定 x_column。")
+            if x_column not in df.columns:
+                return _make_result(text=f"列 '{x_column}' 不存在。")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            if y_column and y_column in df.columns and pd.api.types.is_numeric_dtype(df[y_column]):
+                # Group by x, aggregate y
+                grouped = df.groupby(x_column)[y_column].mean().sort_values(ascending=False).head(30)
+                ax.bar(range(len(grouped)), grouped.values)
+                ax.set_xticks(range(len(grouped)))
+                ax.set_xticklabels(grouped.index, rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel(f"avg({y_column})")
+            else:
+                vc = df[x_column].value_counts().head(30)
+                ax.bar(range(len(vc)), vc.values)
+                ax.set_xticks(range(len(vc)))
+                ax.set_xticklabels(vc.index, rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel("Count")
+            ax.set_title(title or f"Bar chart of {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成柱状图：**{x_column}**",
+                images=[{"base64": b64, "title": title or f"Bar chart of {x_column}", "alt": "bar chart"}]
+            )
+
+        elif chart_type == "histogram":
+            if not x_column:
+                return _make_result(text="直方图需要指定 x_column。")
+            if x_column not in df.columns:
+                return _make_result(text=f"列 '{x_column}' 不存在。")
+            s = df[x_column].dropna()
+            if not pd.api.types.is_numeric_dtype(s):
+                return _make_result(text=f"'{x_column}' 不是数值列，无法绘制直方图。")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.hist(s, bins=30, alpha=0.7, edgecolor='white')
+            ax.set_xlabel(x_column); ax.set_ylabel("Frequency")
+            ax.set_title(title or f"Distribution of {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成直方图：**{x_column}** 分布（均值={s.mean():.2f}, 中位数={s.median():.2f}）",
+                images=[{"base64": b64, "title": title or f"Distribution of {x_column}", "alt": "histogram"}]
+            )
+
+        elif chart_type == "box":
+            if not x_column:
+                return _make_result(text="箱线图需要指定 x_column。")
+            if x_column not in df.columns:
+                return _make_result(text=f"列 '{x_column}' 不存在。")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            if y_column and y_column in df.columns and pd.api.types.is_numeric_dtype(df[y_column]):
+                # Box plot grouped by x
+                groups = [df[df[x_column] == val][y_column].dropna().values for val in df[x_column].dropna().unique()[:20]]
+                labels = [str(val) for val in df[x_column].dropna().unique()[:20]]
+                ax.boxplot(groups, labels=labels)
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel(y_column)
+                ax.set_title(title or f"Box plot of {y_column} by {x_column}")
+            else:
+                s = df[x_column].dropna()
+                if not pd.api.types.is_numeric_dtype(s):
+                    return _make_result(text=f"'{x_column}' 不是数值列，无法绘制箱线图。")
+                ax.boxplot([s.values], labels=[x_column])
+                ax.set_ylabel(x_column)
+                ax.set_title(title or f"Box plot of {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成箱线图：**{x_column}**",
+                images=[{"base64": b64, "title": title or f"Box plot of {x_column}", "alt": "box plot"}]
+            )
+
+        elif chart_type == "heatmap":
+            if len(numeric_cols) < 2:
+                return _make_result(text="需要至少 2 个数值列才能绘制热力图。")
+            cols = numeric_cols[:20]
+            corr = df[cols].corr()
+            fig, ax = plt.subplots(figsize=(max(8, len(cols)*0.5), max(6, len(cols)*0.4)))
+            im = ax.imshow(corr.values, cmap='coolwarm', vmin=-1, vmax=1, aspect='auto')
+            ax.set_xticks(range(len(cols))); ax.set_yticks(range(len(cols)))
+            ax.set_xticklabels(cols, rotation=45, ha='right', fontsize=7)
+            ax.set_yticklabels(cols, fontsize=7)
+            plt.colorbar(im, ax=ax, shrink=0.8)
+            ax.set_title(title or "Correlation Heatmap")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成相关性热力图（{len(cols)} 列）",
+                images=[{"base64": b64, "title": title or "Correlation Heatmap", "alt": "heatmap"}]
+            )
+
+        elif chart_type == "pie":
+            if not x_column:
+                return _make_result(text="饼图需要指定 x_column。")
+            if x_column not in df.columns:
+                return _make_result(text=f"列 '{x_column}' 不存在。")
+            vc = df[x_column].value_counts().head(10)
+            fig, ax = plt.subplots(figsize=(7, 7))
+            wedges, texts, autotexts = ax.pie(vc.values, labels=vc.index, autopct='%1.1f%%',
+                                               textprops={'fontsize': 8})
+            ax.set_title(title or f"Pie chart of {x_column}")
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成饼图：**{x_column}**（共 {len(vc)} 个类别）",
+                images=[{"base64": b64, "title": title or f"Pie chart of {x_column}", "alt": "pie chart"}]
+            )
+
+        elif chart_type == "pairplot":
+            # Select columns: use x_column, y_column, color_column hints if provided
+            select_cols = []
+            for c in [x_column, y_column, color_column]:
+                if c and c in numeric_cols and c not in select_cols:
+                    select_cols.append(c)
+            # Fill up to 5 numeric columns
+            for c in numeric_cols:
+                if len(select_cols) >= 5:
+                    break
+                if c not in select_cols:
+                    select_cols.append(c)
+            select_cols = select_cols[:5]
+            if len(select_cols) < 2:
+                return _make_result(text="需要至少 2 个数值列才能绘制成对关系图。")
+
+            n = len(select_cols)
+            fig, axes = plt.subplots(n, n, figsize=(n*2.5, n*2.2))
+            for i in range(n):
+                for j in range(n):
+                    ax = axes[i][j] if n > 1 else axes
+                    if i == j:
+                        ax.hist(df[select_cols[i]].dropna(), bins=20, alpha=0.7)
+                        ax.set_title(select_cols[i], fontsize=7)
+                    else:
+                        ax.scatter(df[select_cols[j]], df[select_cols[i]], alpha=0.5, s=4)
+                    if j == 0:
+                        ax.set_ylabel(select_cols[i], fontsize=7)
+                    else:
+                        ax.set_yticklabels([])
+                    if i == n - 1:
+                        ax.set_xlabel(select_cols[j], fontsize=7)
+                    else:
+                        ax.set_xticklabels([])
+            plt.suptitle(title or "Pair Plot", fontsize=10)
+            plt.tight_layout()
+            b64 = _fig_to_base64(fig)
+            return _make_result(
+                text=f"已生成配对关系图（{len(select_cols)} 列：{', '.join(select_cols)}）",
+                images=[{"base64": b64, "title": title or "Pair Plot", "alt": "pair plot"}]
+            )
+
+        return _make_result(text=f"未知图表类型: {chart_type}")
+
+    except Exception as e:
+        import traceback
+        return _make_result(text=f"图表生成失败: {e}\n{traceback.format_exc()[-300:]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Code Interpreter (subprocess sandbox)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _execute_code_in_subprocess(code, df, timeout=30):
+    """Execute user code in a subprocess sandbox. Returns structured result."""
+    import subprocess, sys, tempfile, os, io, json, base64
+
+    csv_path = os.path.join(tempfile.gettempdir(), f"_llm_code_df_{os.urandom(4).hex()}.csv")
+    df.to_csv(csv_path, index=False)
+
+    wrapper_code = f'''
+import sys, io, json, base64, os, math, random, collections, itertools, statistics, re
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+import sklearn
+
+df = pd.read_csv({json.dumps(csv_path)})
+
+_captured_figures = []
+
+def _capture_figure(fig=None):
+    fig = fig or plt.gcf()
+    if fig.get_axes():
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+        _captured_figures.append(base64.b64encode(buf.read()).decode('utf-8'))
+    plt.close(fig)
+
+_original_show = plt.show
+def _patched_show(*args, **kwargs):
+    _capture_figure()
+plt.show = _patched_show
+plt.savefig = lambda *a, **kw: _capture_figure()
+
+try:
+{chr(10).join("    " + line for line in code.split(chr(10)))}
+except Exception as e:
+    import traceback
+    print(traceback.format_exc(), file=sys.stderr)
+
+if _captured_figures:
+    print("__FIGURES__:" + json.dumps(_captured_figures))
+
+try:
+    os.remove({json.dumps(csv_path)})
+except:
+    pass
+'''
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        f.write(wrapper_code)
+        script_path = f.name
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, timeout=timeout
+        )
+
+        stdout, stderr = proc.stdout, proc.stderr
+
+        figures = []
+        clean_lines = []
+        for line in stdout.split('\n'):
+            if line.startswith('__FIGURES__:'):
+                try:
+                    figures = json.loads(line[len('__FIGURES__:'):])
+                except json.JSONDecodeError:
+                    pass
+            else:
+                clean_lines.append(line)
+        clean_stdout = '\n'.join(clean_lines).strip()
+        clean_stderr = stderr.strip()
+
+        images = [{"base64": fig, "title": "Code Output", "alt": f"Figure {i+1}"}
+                   for i, fig in enumerate(figures)]
+
+        text_parts = []
+        if clean_stdout:
+            text_parts.append(clean_stdout[:4000])
+        if clean_stderr:
+            text_parts.append(f"\n\n**stderr:**\n```\n{clean_stderr[:2000]}\n```")
+        if not text_parts and not images:
+            text_parts.append("代码执行完毕，无输出。")
+
+        return {"text": '\n'.join(text_parts), "images": images}
+
+    except subprocess.TimeoutExpired:
+        return {"text": "代码执行超时（超过 30 秒），已自动终止。请优化代码或缩小数据范围。", "images": []}
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
+
+
 def _execute_tool(tool_name, args, df, session_id=""):
-    """Execute a tool call and return the result string. All exceptions are caught."""
+    """Execute a tool call and return {"text": str, "images": [{base64,title,alt}]}. All exceptions are caught."""
     import io
     import traceback
     import numpy as np
@@ -398,7 +823,7 @@ def _execute_tool(tool_name, args, df, session_id=""):
     try:
         if tool_name == "get_data_overview":
             from services.data_service import build_data_summary
-            return build_data_summary(df, max_chars=6000)
+            return _make_result(text=build_data_summary(df, max_chars=6000))
 
         elif tool_name == "get_column_details":
             columns = args.get("columns", [])[:10]
@@ -425,19 +850,19 @@ def _execute_tool(tool_name, args, df, session_id=""):
                     if len(vc) > top_n:
                         buf.write(f"  ... 还有 {len(vc) - top_n} 个类别\n")
                 buf.write("\n")
-            return buf.getvalue()
+            return _make_result(text=buf.getvalue())
 
         elif tool_name == "run_regression":
             target_col = args["target_column"]
             if target_col not in df.columns:
-                return f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}"
+                return _make_result(text=f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}")
             if not pd.api.types.is_numeric_dtype(df[target_col]):
-                return f"错误: '{target_col}' 不是数值列，无法用于回归。请选择一个连续数值列作为目标。"
+                return _make_result(text=f"错误: '{target_col}' 不是数值列，无法用于回归。请选择一个连续数值列作为目标。")
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             feature_cols = [c for c in numeric_cols if c != target_col]
             if len(feature_cols) < 1:
-                return f"错误: 没有可用的特征列（除目标列 '{target_col}' 外无其他数值列）。"
+                return _make_result(text=f"错误: 没有可用的特征列（除目标列 '{target_col}' 外无其他数值列）。")
 
             from services.regression_service import train as regression_train
             epochs = min(max(args.get("epochs", 200), 50), 500)
@@ -454,9 +879,9 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 session_id=session_id
             )
             if err:
-                return f"回归训练失败: {err}"
+                return _make_result(text=f"回归训练失败: {err}")
 
-            return json.dumps({
+            return _make_result(text=json.dumps({
                 "features_used": feature_cols,
                 "target": target_col,
                 "epochs_actual": min(epochs, len(result.get("train_losses", []))),
@@ -472,17 +897,17 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 },
                 "train_losses": result.get("train_losses", [])[-5:],
                 "val_losses": result.get("val_losses", [])[-5:]
-            }, ensure_ascii=False)
+            }, ensure_ascii=False))
 
         elif tool_name == "run_classification":
             target_col = args["target_column"]
             if target_col not in df.columns:
-                return f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}"
+                return _make_result(text=f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}")
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             feature_cols = [c for c in numeric_cols if c != target_col]
             if len(feature_cols) < 1:
-                return f"错误: 没有可用的数值特征列。"
+                return _make_result(text=f"错误: 没有可用的数值特征列。")
 
             from services.classification_service import train as classification_train
             epochs = min(max(args.get("epochs", 200), 50), 500)
@@ -498,10 +923,10 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 dataset_name="", session_id=session_id
             )
             if err:
-                return f"分类训练失败: {err}"
+                return _make_result(text=f"分类训练失败: {err}")
 
             cm = result["cm"]
-            return json.dumps({
+            return _make_result(text=json.dumps({
                 "features_used": feature_cols,
                 "target": target_col,
                 "num_classes": result["n_classes"],
@@ -512,13 +937,13 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 "confusion_matrix": cm,
                 "train_losses": result.get("train_losses", [])[-5:],
                 "val_losses": result.get("val_losses", [])[-5:]
-            }, ensure_ascii=False)
+            }, ensure_ascii=False))
 
         elif tool_name == "run_clustering":
             algorithm = args.get("algorithm", "kmeans")
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if len(numeric_cols) < 2:
-                return f"错误: 需要至少 2 个数值列才能聚类，当前只有 {len(numeric_cols)} 个。"
+                return _make_result(text=f"错误: 需要至少 2 个数值列才能聚类，当前只有 {len(numeric_cols)} 个。")
 
             from services.clustering_service import train as clustering_train, elbow as clustering_elbow
 
@@ -526,7 +951,6 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 n_clusters = min(max(args.get("n_clusters", 3), 2), 10)
                 params = {"n_clusters": n_clusters}
 
-                # Also compute elbow
                 try:
                     elbow_result = clustering_elbow(df, numeric_cols, min(10, len(df) // 10))
                 except Exception:
@@ -534,9 +958,9 @@ def _execute_tool(tool_name, args, df, session_id=""):
 
                 result, err = clustering_train(df, numeric_cols, "kmeans", params, "", session_id)
                 if err:
-                    return f"聚类失败: {err}"
+                    return _make_result(text=f"聚类失败: {err}")
 
-                return json.dumps({
+                return _make_result(text=json.dumps({
                     "algorithm": "kmeans",
                     "n_clusters": n_clusters,
                     "features": numeric_cols,
@@ -545,7 +969,7 @@ def _execute_tool(tool_name, args, df, session_id=""):
                     "inertia": result.get("inertia"),
                     "elbow": {"ks": elbow_result["ks"], "inertias": elbow_result["inertias"]} if elbow_result else None,
                     "silhouette_guide": "轮廓系数范围 [-1, 1]，越接近 1 表示聚类质量越好"
-                }, ensure_ascii=False)
+                }, ensure_ascii=False))
 
             else:  # dbscan
                 eps = args.get("eps", 0.5)
@@ -553,9 +977,9 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 params = {"eps": eps, "min_samples": min_samples}
                 result, err = clustering_train(df, numeric_cols, "dbscan", params, "", session_id)
                 if err:
-                    return f"DBSCAN 聚类失败: {err}"
+                    return _make_result(text=f"DBSCAN 聚类失败: {err}")
 
-                return json.dumps({
+                return _make_result(text=json.dumps({
                     "algorithm": "dbscan",
                     "eps": eps, "min_samples": min_samples,
                     "features": numeric_cols,
@@ -564,16 +988,15 @@ def _execute_tool(tool_name, args, df, session_id=""):
                     "silhouette_score": result.get("silhouette"),
                     "noise_points": result.get("cluster_counts", {}).get("-1", 0),
                     "silhouette_guide": "轮廓系数范围 [-1, 1]，越接近 1 越好。噪声点（簇 -1）已被排除在轮廓系数计算之外"
-                }, ensure_ascii=False)
+                }, ensure_ascii=False))
 
         elif tool_name == "run_correlation_analysis":
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if len(numeric_cols) < 2:
-                return f"错误: 需要至少 2 个数值列才能计算相关性，当前只有 {len(numeric_cols)} 个。"
+                return _make_result(text=f"错误: 需要至少 2 个数值列才能计算相关性，当前只有 {len(numeric_cols)} 个。")
 
             top_n = args.get("top_n", 10)
             corr = df[numeric_cols].corr()
-            # Only keep upper triangle, exclude diagonal
             mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
             pairs_data = []
             for i in range(len(numeric_cols)):
@@ -598,13 +1021,29 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 else:
                     strength = "弱" + ("正相关" if r > 0 else "负相关")
                 buf.write(f"- **{row['列 A']}** vs **{row['列 B']}**: r={r:.4f} ({strength})\n")
-            return buf.getvalue()
+            return _make_result(text=buf.getvalue())
+
+        elif tool_name == "generate_chart":
+            return _generate_chart(
+                chart_type=args.get("chart_type", "scatter"),
+                x_column=args.get("x_column", ""),
+                y_column=args.get("y_column", ""),
+                color_column=args.get("color_column", ""),
+                title=args.get("title", ""),
+                df=df
+            )
+
+        elif tool_name == "run_code_interpreter":
+            code = args.get("code", "")
+            if not code.strip():
+                return _make_result(text="错误: 代码不能为空。")
+            return _execute_code_in_subprocess(code, df, timeout=30)
 
         else:
-            return f"未知工具: {tool_name}"
+            return _make_result(text=f"未知工具: {tool_name}")
 
     except Exception:
-        return f"工具执行出错: {traceback.format_exc()[-500:]}"
+        return _make_result(text=f"工具执行出错: {traceback.format_exc()[-500:]}")
 
 
 def _resolve_key(api_key):
@@ -711,19 +1150,26 @@ def agent_chat(api_base, api_key, model, messages, session_id):
 
                 yield {"status": "tool_call", "tool": tool_name, "args": tool_args}
 
-                result_str = _execute_tool(tool_name, tool_args, df, session_id)
-                # Truncate very long results
-                if len(result_str) > _MAX_TOOL_RESULT_CHARS:
-                    result_str = result_str[:_MAX_TOOL_RESULT_CHARS] + "\n... (结果已截断)"
+                result = _execute_tool(tool_name, tool_args, df, session_id)
+                result_text = result.get("text", "")
+                result_images = result.get("images", [])
 
-                yield {"status": "tool_result", "tool": tool_name, "result": result_str}
+                # Yield image events before tool_result for inline display
+                for img in result_images:
+                    yield {"status": "image", "base64": img["base64"], "title": img.get("title", ""), "alt": img.get("alt", "")}
+
+                # Truncate very long text results
+                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
+                    result_text = result_text[:_MAX_TOOL_RESULT_CHARS] + "\n... (结果已截断)"
+
+                yield {"status": "tool_result", "tool": tool_name, "result": result_text}
 
                 full_messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": result_str
+                    "content": result_text
                 })
-                tool_results_context.append({"tool": tool_name, "summary": result_str[:200]})
+                tool_results_context.append({"tool": tool_name, "summary": result_text[:200]})
 
             continue  # back to LLM for next decision
 
