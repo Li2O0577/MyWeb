@@ -1,5 +1,5 @@
 # Indeterminate — Data Analysis Platform
-
+# 现在已停止更新！作为老版本记录
 基于 Streamlit 的数据分析与机器学习 Web 平台，集成回归、分类、聚类、决策树、自定义 MLP 以及 LLM 大模型分析功能。
 
 ## 功能概览
