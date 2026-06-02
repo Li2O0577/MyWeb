@@ -181,6 +181,9 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
                    "n_classes": n_classes},
     }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
 
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     return {
         "acc": acc, "cm": cm, "label_names": label_names,
         "n_classes": n_classes,
@@ -237,8 +240,13 @@ def predict_one(feature_values, device_str="cpu", version_id=None):
     return {"pred_idx": pred_idx, "prob": prob}, None
 
 
+MAX_BATCH_SIZE = 10000
+
+
 def predict_batch(rows, device_str="cpu", version_id=None):
     """Batch prediction. Returns {pred_indices, confidences}."""
+    if len(rows) > MAX_BATCH_SIZE:
+        return None, f"单次预测最多支持 {MAX_BATCH_SIZE} 行，当前请求 {len(rows)} 行。请分批预测。"
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
     model, scaler, config, err = _load_model(device, version_id)
     if err:

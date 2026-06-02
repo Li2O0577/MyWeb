@@ -105,6 +105,7 @@ streamlit run main.py
 | `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（有安全风险，仅开发用） |
 | `INDETERMINATE_API_BASE` | `http://127.0.0.1:5001/api` | 前端 API 地址 |
 | `LLM_API_KEY` | 无 | LLM 默认 API 密钥，设置后前端无需手动填写 |
+| `LLM_ALLOW_LOCAL_API_BASE` | `0` | 设为 `1` 才允许 LLM API Base 使用 localhost/私网地址，仅建议本地开发使用 |
 
 ### 4. 清理缓存
 
@@ -175,6 +176,7 @@ MyWeb1/
 │   │   └── llm_routes.py        # SSE 流式聊天
 │   ├── services/                # 业务逻辑层（从 Streamlit 抽出的核心计算）
 │   │   ├── _safe_serialize.py     # 安全序列化：np.savez + RestrictedUnpickler 替代 pickle
+│   │   ├── _sandbox.py            # 代码解释器沙箱：AST 验证 + 受限 exec() 环境
 │   │   ├── data_service.py
 │   │   ├── regression_service.py
 │   │   ├── classification_service.py
@@ -267,16 +269,17 @@ MyWeb1/
   - 需要支持 function calling 的模型
 - 现代化聊天 UI：原生 Streamlit 组件，Markdown 渲染，图片内嵌显示
 - SSE 流式响应，实时打字机效果
-- API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ `LLM_API_KEY` 环境密钥支持
+- API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ `LLM_API_KEY` 环境密钥支持；localhost/私网地址默认禁用，可用 `LLM_ALLOW_LOCAL_API_BASE=1` 在本地开发时开启
 
 ## 安全设计
 
 - **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启
 - **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；Agent 模式下工具执行均在服务端完成，LLM 不直接访问数据文件
+- **本地 API Base 开关**：localhost/私网 LLM API Base 默认不允许，避免部署环境 SSRF；仅本地开发时设置 `LLM_ALLOW_LOCAL_API_BASE=1`
 - **文件上传**：256MB 硬限制，防止内存耗尽
 - **Session 存储**：Parquet + JSON 替代 pickle，旧 `.pkl` session 通过 `RestrictedUnpickler`（模块白名单）安全迁移后删除
 - **模型序列化**：StandardScaler / KMeans 参数用 `np.savez` 保存（`.npz` 格式，零代码执行）；DecisionTree Pipeline 等复杂对象经 `RestrictedUnpickler` 加载，仅允许 sklearn/numpy/pandas/pyarrow 模块
-- **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围；代码解释器在隔离子进程中执行（30s 超时 + 10000 字符限制 + matplotlib Agg 后端），失败时返回结构化中文错误
+- **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围；代码解释器使用**三层沙箱**（AST 预验证 → `exec()` 受限内置函数 → 子进程隔离 + 30s 超时），拦截 `import/eval/exec/open/__class__` 等攻击；Agent 训练自动调用完整的训练前校验（缺失率/类别数/特征合法性），与路由层一致；代码执行失败时返回结构化中文错误
 
 ## 开发者
 

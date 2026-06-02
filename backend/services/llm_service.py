@@ -17,7 +17,10 @@ _ALLOWED_HOSTS = [
     "api.baichuan-ai.com",            # 百川
     "api.minimax.chat",               # MiniMax
     "api.zhipuai.cn",                 # 智谱 AI
-    # 本地开发
+]
+
+_LOCAL_ALLOWED_HOSTS = [
+    # 本地/私网开发。默认禁用；设置 LLM_ALLOW_LOCAL_API_BASE=1 后启用。
     "localhost",
     "127.0.0.1",
     r"192\.168\..*",
@@ -29,6 +32,11 @@ _MAX_MESSAGE_LENGTH = 32000  # max chars per message to avoid abuse
 _MAX_AGENT_MESSAGES = 30
 _MAX_AGENT_TOOL_CALLS = 12
 _MAX_TOOL_RESULT_CHARS = 6000
+_MAX_AGENT_TRAIN_EPOCHS = 120
+_MAX_AGENT_TRAIN_ROWS = 5000
+_MAX_CODE_INTERPRETER_ROWS = 5000
+_MAX_CODE_INTERPRETER_COLS = 80
+_MAX_CODE_INTERPRETER_CSV_BYTES = 5 * 1024 * 1024
 
 
 def _validate_model_name(model):
@@ -42,8 +50,6 @@ def _validate_model_name(model):
 def _validate_messages(messages):
     if not isinstance(messages, list) or len(messages) == 0:
         return False, "messages 不能为空"
-    if len(messages) > _MAX_AGENT_MESSAGES:
-        return False, f"对话轮数过多，请清空对话或缩短上下文（最多 {_MAX_AGENT_MESSAGES} 条消息）。"
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict):
             return False, f"messages[{i}] 格式无效"
@@ -60,6 +66,13 @@ def _validate_messages(messages):
 
 def _trim_messages(messages):
     return messages[-_MAX_AGENT_MESSAGES:] if len(messages) > _MAX_AGENT_MESSAGES else messages
+
+
+def _prepare_messages(messages):
+    """Trim long conversations before validating message shape/content."""
+    if not isinstance(messages, list):
+        return messages
+    return _trim_messages(messages)
 
 
 def _safe_int(value, default, lower, upper):
@@ -92,15 +105,22 @@ def _validate_api_base(api_base):
     except Exception:
         return False, f"无法解析 api_base: {api_base}"
 
+    if parsed.scheme not in {"http", "https"}:
+        return False, "api_base 仅支持 http 或 https 协议"
+
     hostname = parsed.hostname or ""
     if not hostname:
         return False, f"api_base 缺少有效主机名: {api_base}"
 
-    for pattern in _ALLOWED_HOSTS:
+    patterns = list(_ALLOWED_HOSTS)
+    if os.environ.get("LLM_ALLOW_LOCAL_API_BASE", "0") == "1":
+        patterns.extend(_LOCAL_ALLOWED_HOSTS)
+
+    for pattern in patterns:
         if re.fullmatch(pattern, hostname):
             return True, None
 
-    return False, f"不允许的 API 主机: {hostname}。请使用受支持的 LLM 提供商。"
+    return False, f"不允许的 API 主机: {hostname}。请使用受支持的 LLM 提供商；如需本地/私网地址，请在开发环境设置 LLM_ALLOW_LOCAL_API_BASE=1。"
 
 
 def stream_chat(api_base, api_key, model, messages, temperature=0.7, timeout=180):
@@ -119,6 +139,7 @@ def stream_chat(api_base, api_key, model, messages, temperature=0.7, timeout=180
         yield None, "未提供 API Key。请在设置中填写，或设置环境变量 LLM_API_KEY。"
         return
 
+    messages = _prepare_messages(messages)
     ok, msg_err = _validate_messages(messages)
     if not ok:
         yield None, msg_err
@@ -127,7 +148,6 @@ def stream_chat(api_base, api_key, model, messages, temperature=0.7, timeout=180
     if not ok:
         yield None, model_err
         return
-    messages = _trim_messages(messages)
     try:
         temperature = float(temperature)
     except (TypeError, ValueError):
@@ -381,8 +401,9 @@ def _sanitize_tool_args(tool_name, args, df):
         target = args.get("target_column", "")
         return {
             "target_column": target if target in df.columns else "",
-            "epochs": _safe_int(args.get("epochs", 120), 120, 50, 500),
+            "epochs": _safe_int(args.get("epochs", 80), 80, 20, _MAX_AGENT_TRAIN_EPOCHS),
             "learning_rate": _safe_float(args.get("learning_rate", 0.001), 0.001, 1e-5, 0.05),
+            "device": args.get("device", "auto"),
         }
 
     if tool_name == "run_clustering":
@@ -713,36 +734,66 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
 # Code Interpreter (subprocess sandbox)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _execute_code_in_subprocess(code, df, timeout=30):
-    """Execute user code in a subprocess sandbox. Returns structured result."""
-    import subprocess, sys, tempfile, os, io, json, base64
+def _build_sandboxed_wrapper(code, csv_path):
+    """Generate a wrapper script that runs *code* inside a restricted exec().
 
-    csv_path = os.path.join(tempfile.gettempdir(), f"_llm_code_df_{os.urandom(4).hex()}.csv")
-    df.to_csv(csv_path, index=False)
+    Uses ``.replace()`` on sentinel markers (``__CODE_JSON__`` /
+    ``__CSV_JSON__``) so that the template can contain literal curly braces
+    without f-string escaping issues.
+    """
+    import json
+    code_json = json.dumps(code)
+    csv_json = json.dumps(csv_path)
 
-    wrapper_code = f'''
-import sys, io, json, base64, os, math, random, collections, itertools, statistics, re
+    template = r'''\
+import sys, os, io, json as _json, base64, math, random, collections, itertools, statistics, re
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 import sklearn
 
-df = pd.read_csv({json.dumps(csv_path)})
+# ── Data ──
+df = pd.read_csv(__CSV_JSON__)
 
+# ── User code ──
+USER_CODE = __CODE_JSON__
+
+# ── Optional sandbox layers ──
+_SANDBOX_ACTIVE = False
+_backend_dir = os.environ.get("_SANDBOX_BACKEND_DIR")
+if _backend_dir and _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+try:
+    from services._sandbox import validate_code_ast, make_safe_globals, CodeValidationError
+    _SANDBOX_ACTIVE = True
+except ImportError:
+    pass
+
+if _SANDBOX_ACTIVE:
+    try:
+        validate_code_ast(USER_CODE)
+    except CodeValidationError as e:
+        print(f"Sandbox blocked: {e}", file=sys.stderr)
+        sys.exit(1)
+    except SyntaxError as e:
+        print(f"Syntax error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+# ── Figure capture ──
 _captured_figures = []
 
 def _capture_figure(fig=None):
     fig = fig or plt.gcf()
     if fig.get_axes():
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
         buf.seek(0)
-        _captured_figures.append(base64.b64encode(buf.read()).decode('utf-8'))
+        _captured_figures.append(base64.b64encode(buf.read()).decode("utf-8"))
     plt.close(fig)
 
 _original_show = plt.show
@@ -751,29 +802,119 @@ def _patched_show(*args, **kwargs):
 plt.show = _patched_show
 plt.savefig = lambda *a, **kw: _capture_figure()
 
-try:
-{chr(10).join("    " + line for line in code.split(chr(10)))}
-except Exception as e:
-    import traceback
-    print(traceback.format_exc(), file=sys.stderr)
+# ── Execute ──
+if _SANDBOX_ACTIVE:
+    _safe_globals = make_safe_globals()
+    _safe_globals.update({
+        "df": df,
+        "np": np, "pd": pd, "plt": plt,
+        "stats": stats, "sklearn": sklearn,
+        "math": math, "random": random,
+        "collections": collections, "itertools": itertools,
+        "statistics": statistics, "re": re,
+        "datetime": datetime, "timedelta": timedelta,
+        "_capture_figure": _capture_figure,
+    })
+    try:
+        exec(USER_CODE, _safe_globals)
+    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+else:
+    try:
+        exec(USER_CODE, {
+            "df": df, "np": np, "pd": pd, "plt": plt,
+            "stats": stats, "sklearn": sklearn,
+            "math": math, "random": random,
+            "collections": collections, "itertools": itertools,
+            "statistics": statistics, "re": re,
+            "datetime": datetime, "timedelta": timedelta,
+        })
+    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
 
+# ── Output figures ──
 if _captured_figures:
-    print("__FIGURES__:" + json.dumps(_captured_figures))
+    print("__FIGURES__:" + _json.dumps(_captured_figures))
 
+# ── Cleanup ──
 try:
-    os.remove({json.dumps(csv_path)})
-except:
+    os.remove(__CSV_JSON__)
+except Exception:
     pass
 '''
+    return template.replace('__CODE_JSON__', code_json).replace('__CSV_JSON__', csv_json)
+
+
+def _execute_code_in_subprocess(code, df, timeout=30):
+    """Execute user code in a subprocess sandbox. Returns structured result."""
+    import subprocess, sys, tempfile, os, io, json, base64, ast
+
+    # ── Layer 1: AST pre-validation (fast-fail, no subprocess) ──
+    try:
+        from services._sandbox import validate_code_ast as _sandbox_validate
+        from services._sandbox import CodeValidationError as _SandboxCodeError
+    except ImportError:
+        _sandbox_validate = None
+        _SandboxCodeError = None
+
+    if _sandbox_validate is not None and _SandboxCodeError is not None:
+        try:
+            _sandbox_validate(code)
+        except _SandboxCodeError as e:
+            return {"text": f"代码安全检查未通过: {e}", "images": []}
+        except SyntaxError as e:
+            return {"text": f"代码语法错误: {e}", "images": []}
+
+    if len(df.columns) > _MAX_CODE_INTERPRETER_COLS:
+        return {
+            "text": (
+                f"代码解释器最多支持 {_MAX_CODE_INTERPRETER_COLS} 列，"
+                f"当前数据有 {len(df.columns)} 列。请先在数据处理页筛选列，或让 Agent 指定更少的列。"
+            ),
+            "images": [],
+        }
+
+    run_df = df
+    sampled = False
+    if len(run_df) > _MAX_CODE_INTERPRETER_ROWS:
+        run_df = run_df.sample(n=_MAX_CODE_INTERPRETER_ROWS, random_state=42)
+        sampled = True
+
+    csv_text = run_df.to_csv(index=False)
+    csv_bytes = csv_text.encode("utf-8")
+    if len(csv_bytes) > _MAX_CODE_INTERPRETER_CSV_BYTES:
+        return {
+            "text": (
+                "代码解释器输入数据过大，已停止执行。"
+                f"当前采样后 CSV 约 {len(csv_bytes) / 1024 / 1024:.1f} MB，"
+                f"上限为 {_MAX_CODE_INTERPRETER_CSV_BYTES / 1024 / 1024:.0f} MB。"
+                "请先筛选列或减少数据量。"
+            ),
+            "images": [],
+        }
+
+    csv_path = os.path.join(tempfile.gettempdir(), f"_llm_code_df_{os.urandom(4).hex()}.csv")
+    with open(csv_path, "wb") as f:
+        f.write(csv_bytes)
+
+    wrapper_code = _build_sandboxed_wrapper(code, csv_path)
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
         f.write(wrapper_code)
         script_path = f.name
 
+    # Pass backend directory so the subprocess can import services._sandbox
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = os.environ.copy()
+    env['_SANDBOX_BACKEND_DIR'] = backend_dir
+
     try:
         proc = subprocess.run(
             [sys.executable, script_path],
-            capture_output=True, text=True, timeout=timeout
+            capture_output=True, text=True, timeout=timeout,
+            env=env,
         )
 
         stdout, stderr = proc.stdout, proc.stderr
@@ -795,6 +936,10 @@ except:
                    for i, fig in enumerate(figures)]
 
         text_parts = []
+        if sampled:
+            text_parts.append(
+                f"提示：原始数据有 {len(df)} 行，代码解释器本次使用固定随机种子抽样的 {len(run_df)} 行执行。"
+            )
         if clean_stdout:
             text_parts.append(clean_stdout[:4000])
         if clean_stderr:
@@ -809,6 +954,10 @@ except:
     finally:
         try:
             os.unlink(script_path)
+        except OSError:
+            pass
+        try:
+            os.unlink(csv_path)
         except OSError:
             pass
 
@@ -858,14 +1007,31 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 return _make_result(text=f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}")
             if not pd.api.types.is_numeric_dtype(df[target_col]):
                 return _make_result(text=f"错误: '{target_col}' 不是数值列，无法用于回归。请选择一个连续数值列作为目标。")
+            if len(df) > _MAX_AGENT_TRAIN_ROWS:
+                return _make_result(
+                    text=(
+                        f"Agent 自动训练最多支持 {_MAX_AGENT_TRAIN_ROWS} 行，当前有 {len(df)} 行。"
+                        "请先筛选/采样数据，或到回归页面手动训练。"
+                    )
+                )
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             feature_cols = [c for c in numeric_cols if c != target_col]
             if len(feature_cols) < 1:
                 return _make_result(text=f"错误: 没有可用的特征列（除目标列 '{target_col}' 外无其他数值列）。")
 
+            # Full pre-training validation (same as route layer)
+            from services.training_validation import validate_regression_training
+            if val_err := validate_regression_training(df, target_col, feature_cols, batch_size=32):
+                return _make_result(text=f"训练前校验未通过: {val_err['error']}")
+
             from services.regression_service import train as regression_train
-            epochs = min(max(args.get("epochs", 200), 50), 500)
+            import torch as _torch
+            device_str = args.get("device", "auto")
+            if device_str == "auto":
+                device_str = "cuda" if _torch.cuda.is_available() else "cpu"
+
+            epochs = min(max(args.get("epochs", 80), 20), _MAX_AGENT_TRAIN_EPOCHS)
             lr = args.get("learning_rate", 0.001)
 
             result, err = regression_train(
@@ -874,9 +1040,8 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 hidden2=max(64, len(feature_cols) // 2),
                 dropout_rate=0.2,
                 learning_rate=lr, epochs=epochs, batch_size=32,
-                device_str="cpu",
-                dataset_name=getattr(df, 'attrs', {}).get('source_name', '') or "",
-                session_id=session_id
+                device_str=device_str,
+                dataset_name="", session_id=session_id
             )
             if err:
                 return _make_result(text=f"回归训练失败: {err}")
@@ -903,14 +1068,31 @@ def _execute_tool(tool_name, args, df, session_id=""):
             target_col = args["target_column"]
             if target_col not in df.columns:
                 return _make_result(text=f"错误: 列 '{target_col}' 不存在。可用列: {', '.join(str(c) for c in df.columns)}")
+            if len(df) > _MAX_AGENT_TRAIN_ROWS:
+                return _make_result(
+                    text=(
+                        f"Agent 自动训练最多支持 {_MAX_AGENT_TRAIN_ROWS} 行，当前有 {len(df)} 行。"
+                        "请先筛选/采样数据，或到分类页面手动训练。"
+                    )
+                )
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             feature_cols = [c for c in numeric_cols if c != target_col]
             if len(feature_cols) < 1:
                 return _make_result(text=f"错误: 没有可用的数值特征列。")
 
+            # Full pre-training validation (same as route layer)
+            from services.training_validation import validate_classification_training
+            if val_err := validate_classification_training(df, target_col, feature_cols, batch_size=32):
+                return _make_result(text=f"训练前校验未通过: {val_err['error']}")
+
             from services.classification_service import train as classification_train
-            epochs = min(max(args.get("epochs", 200), 50), 500)
+            import torch as _torch
+            device_str = args.get("device", "auto")
+            if device_str == "auto":
+                device_str = "cuda" if _torch.cuda.is_available() else "cpu"
+
+            epochs = min(max(args.get("epochs", 80), 20), _MAX_AGENT_TRAIN_EPOCHS)
             lr = args.get("learning_rate", 0.001)
 
             result, err = classification_train(
@@ -919,7 +1101,7 @@ def _execute_tool(tool_name, args, df, session_id=""):
                 hidden2=max(64, len(feature_cols) // 2),
                 dropout_rate=0.2,
                 learning_rate=lr, epochs=epochs, batch_size=32,
-                device_str="cpu",
+                device_str=device_str,
                 dataset_name="", session_id=session_id
             )
             if err:

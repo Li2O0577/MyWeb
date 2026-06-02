@@ -51,6 +51,35 @@ def _local_data_summary(df):
     return buf.getvalue()
 
 
+def _render_image(img_event):
+    """Render a base64-encoded image from an SSE image event."""
+    try:
+        st.image(base64.b64decode(img_event["base64"]),
+                 caption=img_event.get("title", ""),
+                 use_container_width=True)
+    except Exception:
+        st.toast("图片解码失败，已跳过。", icon="⚠️")
+
+
+def _iter_sse_events(response):
+    """Yield parsed JSON events from an SSE streaming response."""
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        try:
+            yield json.loads(line[6:])
+        except json.JSONDecodeError:
+            continue
+
+
+def _rollback_user_message(data_was_attached=False):
+    """Remove the last user message on failure and revert data-sent flag."""
+    if st.session_state.chat_messages:
+        st.session_state.chat_messages.pop()
+    if data_was_attached:
+        st.session_state.chat_data_sent = False
+
+
 SKILL_INFO = """
 ## Available Analysis Skills in This Platform
 
@@ -170,12 +199,7 @@ for msg in st.session_state.chat_messages:
         with st.chat_message("assistant", avatar="🤖"):
             st.markdown(msg["content"])
             for img in msg.get("images", []):
-                try:
-                    st.image(base64.b64decode(img["base64"]),
-                             caption=img.get("title", ""),
-                             use_container_width=True)
-                except Exception:
-                    pass
+                _render_image(img)
 
 
 # ── Chat input ──
@@ -191,7 +215,11 @@ if user_input:
     elif not user_input.strip():
         st.toast("请输入消息。", icon="❌")
     else:
-        st.session_state.chat_messages.append({"role": "user", "content": user_input.strip()})
+        text = user_input.strip()
+        st.session_state.chat_messages.append({"role": "user", "content": text})
+
+        with st.chat_message("user"):
+            st.markdown(text)
 
         if is_agent:
             # ── Agent Mode ──
@@ -216,22 +244,15 @@ if user_input:
                 try:
                     resp = agent_chat_llm(sid, api_base, api_key, model, agent_messages)
                     if resp.status_code != 200:
-                        st.session_state.chat_messages.pop()
+                        _rollback_user_message()
+                        tool_placeholder.empty()
+                        img_status_placeholder.empty()
                         st.toast(f"大模型分析请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
                         st.stop()
 
-                    for line in resp.iter_lines(decode_unicode=True):
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data_str = line[6:]
-                        try:
-                            event = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-
+                    for event in _iter_sse_events(resp):
                         if "error" in event:
-                            if st.session_state.chat_messages:
-                                st.session_state.chat_messages.pop()
+                            _rollback_user_message()
                             err = event["error"]
                             code = err.get("code", "ERROR")
                             message = err.get("message", "请求失败")
@@ -244,6 +265,7 @@ if user_input:
 
                         elif event.get("status") == "image":
                             images.append(event)
+                            _render_image(event)
                             img_status_placeholder.caption(f"📊 已生成 {len(images)} 张图表")
 
                         elif event.get("status") == "tool_call":
@@ -268,22 +290,13 @@ if user_input:
                         elif event.get("done"):
                             break
 
-                    if full_reply or images:
+                    if full_reply or images or tool_events:
                         text_placeholder.markdown(full_reply)
                         tool_placeholder.empty()
                         img_status_placeholder.empty()
-                        if images:
-                            for img in images:
-                                try:
-                                    st.image(base64.b64decode(img["base64"]),
-                                             caption=img.get("title", ""),
-                                             use_container_width=True)
-                                except Exception:
-                                    pass
 
                         msg_record = {"role": "assistant", "content": full_reply, "images": images}
                         st.session_state.chat_messages.append(msg_record)
-                        # Store tool events as collapsed tool messages
                         for te in tool_events:
                             short_info = f"参数: {json.dumps(te.get('args', {}), ensure_ascii=False)}"
                             st.session_state.chat_messages.append({
@@ -293,12 +306,27 @@ if user_input:
                             })
                         st.rerun()
                     elif not error_occurred:
-                        st.session_state.chat_messages.pop()
+                        _rollback_user_message()
                         st.toast("Agent 返回了空响应，请重试。", icon="❌")
 
                 except Exception as e:
-                    st.session_state.chat_messages.pop()
-                    st.toast(f"Agent 错误: {e}", icon="❌")
+                    if full_reply or images or tool_events:
+                        text_placeholder.empty()
+                        tool_placeholder.empty()
+                        img_status_placeholder.empty()
+                        msg_record = {"role": "assistant", "content": full_reply, "images": images}
+                        st.session_state.chat_messages.append(msg_record)
+                        for te in tool_events:
+                            st.session_state.chat_messages.append({
+                                "role": "tool",
+                                "tool_name": te["name"],
+                                "content": f"参数: {json.dumps(te.get('args', {}), ensure_ascii=False)}"
+                            })
+                        st.toast(f"Agent 连接中断（已保存部分结果）: {e}", icon="⚠️")
+                        st.rerun()
+                    else:
+                        _rollback_user_message()
+                        st.toast(f"Agent 错误: {e}", icon="❌")
 
         else:
             # ── Smart / Direct Mode ──
@@ -332,55 +360,46 @@ if user_input:
                 try:
                     resp = chat_llm(api_base, api_key, model, api_messages)
                     if resp.status_code != 200:
-                        st.session_state.chat_messages.pop()
-                        if data_was_attached:
-                            st.session_state.chat_data_sent = False
+                        _rollback_user_message(data_was_attached)
                         st.toast(f"大模型请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
                         st.stop()
 
-                    for line in resp.iter_lines(decode_unicode=True):
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data_str = line[6:]
-                        try:
-                            event = json.loads(data_str)
-                            if "error" in event:
-                                st.session_state.chat_messages.pop()
-                                if data_was_attached:
-                                    st.session_state.chat_data_sent = False
-                                err = event["error"]
-                                if isinstance(err, dict):
-                                    code = err.get("code", "ERROR")
-                                    message = err.get("message", "请求失败")
-                                    detail = err.get("detail", "")
-                                    suffix = f" ({detail})" if detail and detail != message else ""
-                                    st.toast(f"请求没有完成：{message}{suffix}", icon="❌")
-                                else:
-                                    st.toast(f"请求没有完成：{err}", icon="❌")
-                                st.stop()
-                            if event.get("done"):
-                                break
-                            if "chunk" in event:
-                                full_reply += event["chunk"]
-                                text_placeholder.markdown(full_reply + cursor)
-                        except json.JSONDecodeError:
-                            continue
+                    for event in _iter_sse_events(resp):
+                        if "error" in event:
+                            _rollback_user_message(data_was_attached)
+                            err = event["error"]
+                            if isinstance(err, dict):
+                                code = err.get("code", "ERROR")
+                                message = err.get("message", "请求失败")
+                                detail = err.get("detail", "")
+                                suffix = f" ({detail})" if detail and detail != message else ""
+                                st.toast(f"请求没有完成：{message}{suffix}", icon="❌")
+                            else:
+                                st.toast(f"请求没有完成：{err}", icon="❌")
+                            st.stop()
+                        if event.get("done"):
+                            break
+                        if "chunk" in event:
+                            full_reply += event["chunk"]
+                            text_placeholder.markdown(full_reply + cursor)
 
                     if full_reply:
                         st.session_state.chat_messages.append({"role": "assistant", "content": full_reply, "images": []})
                         text_placeholder.markdown(full_reply)
                         st.rerun()
                     else:
-                        st.session_state.chat_messages.pop()
-                        if data_was_attached:
-                            st.session_state.chat_data_sent = False
+                        _rollback_user_message(data_was_attached)
                         st.toast("LLM 返回了空响应，请重试。", icon="❌")
 
                 except Exception as e:
-                    st.session_state.chat_messages.pop()
-                    if data_was_attached:
-                        st.session_state.chat_data_sent = False
-                    st.toast(f"未知错误：{e}", icon="❌")
+                    if full_reply:
+                        text_placeholder.empty()
+                        st.session_state.chat_messages.append({"role": "assistant", "content": full_reply, "images": []})
+                        st.toast(f"连接中断（已保存部分结果）: {e}", icon="⚠️")
+                        st.rerun()
+                    else:
+                        _rollback_user_message(data_was_attached)
+                        st.toast(f"未知错误：{e}", icon="❌")
 
 st.divider()
 with st.expander("📖 使用说明", expanded=False):

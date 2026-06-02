@@ -237,6 +237,9 @@ def train(df, target_col, feature_cols, layers_config,
         result["n_classes"] = n_classes
         result["reverse_label_map"] = {str(k): str(v) for k, v in reverse_label_map.items()}
 
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     result["version_id"] = version_id
     return result, None
 
@@ -286,8 +289,13 @@ def predict_one(feature_values, device_str="cpu", version_id=None):
                         "all_probs": probs.tolist()}, None
 
 
+MAX_BATCH_SIZE = 10000
+
+
 def predict_batch(rows, device_str="cpu", version_id=None):
     """Batch prediction."""
+    if len(rows) > MAX_BATCH_SIZE:
+        return None, f"单次预测最多支持 {MAX_BATCH_SIZE} 行，当前请求 {len(rows)} 行。请分批预测。"
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
     model, scaler, config, err = _load_model(device, version_id)
     if err:

@@ -1,4 +1,5 @@
 """Data upload & processing API routes."""
+import logging
 import numpy as np
 from flask import Blueprint, request, jsonify
 from routes._responses import api_error, session_expired
@@ -6,6 +7,7 @@ from services.data_service import parse_file, detect_outliers, build_data_summar
 from session_store import create_session, get_session, get_session_meta, update_session
 
 data_bp = Blueprint("data", __name__)
+_log = logging.getLogger(__name__)
 
 
 MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
@@ -14,23 +16,23 @@ MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
 def upload():
     """Upload CSV/Excel, return session_id + data summary."""
     if 'file' not in request.files:
-        return api_error("NO_FILE", "No file provided", 400, "Upload a CSV or Excel file in the `file` form field.")
+        return api_error("NO_FILE", "没有收到上传文件", 400, "请在 file 表单字段中上传 CSV 或 Excel 文件。")
     file = request.files['file']
     # Check Content-Length before reading into memory
     cl = request.content_length
     if cl is not None and cl > MAX_FILE_SIZE:
         return api_error(
             "FILE_TOO_LARGE",
-            f"File too large ({cl / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+            f"上传文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 256 MB。",
             413,
-            detail="Please split the file or reduce its size before uploading.",
+            detail="请先压缩、拆分文件，或减少数据量后再上传。",
         )
     try:
         file_bytes = file.read()
         if len(file_bytes) > MAX_FILE_SIZE:
             return api_error(
                 "FILE_TOO_LARGE",
-                f"File too large ({len(file_bytes) / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+                f"上传文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 256 MB。",
                 413,
             )
         df = parse_file(file_bytes, file.filename)
@@ -51,8 +53,14 @@ def upload():
             "preview": serialize_preview(df),
             "summary": build_data_summary(df)
         })
-    except Exception as e:
-        return api_error("UPLOAD_FAILED", "Failed to parse uploaded file", 500, str(e))
+    except Exception:
+        _log.exception("Failed to parse uploaded file")
+        return api_error(
+            "UPLOAD_FAILED",
+            "上传文件解析失败",
+            400,
+            "请确认文件格式为 CSV 或 Excel，且内容没有损坏。",
+        )
 
 
 @data_bp.route("/<sid>/outliers", methods=["GET"])
@@ -90,8 +98,16 @@ def process_data(sid):
                 df = df.rename(columns={op["old"]: op["new"]})
             elif op_type == "astype":
                 df[op["col"]] = df[op["col"]].astype(op["dtype"])
-        except Exception as e:
-            return api_error("PROCESSING_FAILED", f"Operation {op_type} failed", 400, str(e))
+            else:
+                return api_error("PROCESSING_FAILED", f"不支持的数据处理操作：{op_type}", 400)
+        except Exception:
+            _log.exception("Data processing operation failed: %s", op_type)
+            return api_error(
+                "PROCESSING_FAILED",
+                f"数据处理操作失败：{op_type}",
+                400,
+                "请检查选择的列、行号、目标类型或表达式是否有效。",
+            )
 
     update_session(sid, df)
 
@@ -116,22 +132,24 @@ def get_summary(sid):
 def sync_data(sid):
     """Sync current DataFrame to session. Used by ML pages before training."""
     if 'file' not in request.files:
-        return api_error("NO_FILE", "No file provided", 400, "Upload a CSV representation in the `file` form field.")
+        return api_error("NO_FILE", "没有收到同步文件", 400, "请在 file 表单字段中上传当前数据的 CSV 内容。")
     file = request.files['file']
     cl = request.content_length
     if cl is not None and cl > MAX_FILE_SIZE:
         return api_error(
             "FILE_TOO_LARGE",
-            f"File too large ({cl / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+            f"同步文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 256 MB。",
             413,
+            detail="请减少数据量后再同步。",
         )
     try:
         file_bytes = file.read()
         if len(file_bytes) > MAX_FILE_SIZE:
             return api_error(
                 "FILE_TOO_LARGE",
-                f"File too large ({len(file_bytes) / 1024 / 1024:.0f} MB). Maximum is 256 MB.",
+                f"同步文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 256 MB。",
                 413,
+                detail="请减少数据量后再同步。",
             )
         df = parse_file(file_bytes, file.filename)
         if not update_session(sid, df, source_name=file.filename):
@@ -142,5 +160,11 @@ def sync_data(sid):
             "n_rows": len(df),
             "n_cols": len(df.columns),
         })
-    except Exception as e:
-        return api_error("SYNC_FAILED", "Failed to sync current data", 500, str(e))
+    except Exception:
+        _log.exception("Failed to sync current data")
+        return api_error(
+            "SYNC_FAILED",
+            "当前数据同步失败",
+            400,
+            "请确认当前数据可以导出为 CSV，且列名和内容没有异常。",
+        )
