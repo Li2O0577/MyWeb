@@ -5,17 +5,18 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.metrics import classification_report
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_small_dataset_warning, render_class_balance_warning, render_risk_notice
+from pages._mlp_common import render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning, render_class_balance_warning, render_risk_notice, task_mismatch_message
 from pages._api import train_decision_tree, predict_decision_tree, clear_decision_tree, ensure_session, decision_tree_status, backend_status_badge, render_backend_sync_panel, list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version
+from pages._ui_common import render_metric_row, render_page_header, render_section_header
 
 st.set_page_config(page_title="决策树", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/7_decision_tree.py")
-st.title("🌳 决策树模型")
+render_page_header("决策树模型", "训练可解释的分类/回归决策树，并使用当前版本进行预测。")
 
 backend_status_badge()
 
-with st.expander("📢 功能介绍", expanded=True):
+with st.expander("功能介绍", expanded=False):
     st.markdown("""
     ### 决策树模型（分类 & 回归 · 带可解释性）
     1. **双任务支持**：分类任务 + 回归任务，一键切换
@@ -46,7 +47,7 @@ categorical_cols = df_clean.select_dtypes(exclude=[np.number]).columns.tolist()
 if "dt_task_type" not in st.session_state:
     st.session_state.dt_task_type = "classification"
 
-st.subheader("⚙️ 模型参数配置")
+render_section_header("模型参数配置", "选择任务类型、目标列、特征列和树模型参数。")
 target_col = st.selectbox("选择目标列（y）", df_clean.columns, index=len(df_clean.columns)-1)
 
 task_col, depth_col, crit_col = st.columns(3)
@@ -108,7 +109,22 @@ if "dt_result" not in st.session_state or st.session_state.get("dt_version_id") 
 
 render_task_mismatch_warning("决策树", st.session_state.dt_task_type, st.session_state.get("dt_task_saved"))
 
-st.subheader("🚀 模型训练")
+render_ml_workbench_overview(
+    "决策树",
+    df_clean,
+    backend_synced=backend_synced,
+    model_status=status,
+    task_text="分类" if is_cls else "回归",
+    target_text=str(target_col),
+    feature_count=n_features,
+    sample_count=n_samples,
+    extra_items=[
+        ("最大深度", max_depth),
+        ("划分标准", criterion),
+    ],
+)
+
+render_section_header("模型训练", "启动训练或清除当前决策树模型。")
 train_col, clear_col = st.columns(2)
 
 with train_col:
@@ -147,9 +163,11 @@ with train_col:
                         fig_cm.update_layout(xaxis_title="预测值", yaxis_title="实际值", height=300, margin=dict(l=0, r=0, t=0, b=0))
                         st.plotly_chart(fig_cm, use_container_width=True)
                 if not is_cls:
-                    st.metric("R² Score", f"{result['r2']:.4f}")
-                    st.metric("MAE", f"{result['mae']:.4f}")
-                    st.metric("RMSE", f"{result['rmse']:.4f}")
+                    render_metric_row([
+                        ("R² Score", f"{result['r2']:.4f}"),
+                        ("MAE", f"{result['mae']:.4f}"),
+                        ("RMSE", f"{result['rmse']:.4f}"),
+                    ])
 
                 if "tree_rules" in result:
                     st.markdown("### 🌿 决策树层级规则")
@@ -163,12 +181,12 @@ with train_col:
 with clear_col:
     if st.button("清除已保存决策树模型", use_container_width=True):
         clear_decision_tree()
-        for k in ["dt_result", "dt_features", "dt_target", "dt_task_saved", "dt_version_id"]:
+        for k in ["dt_result", "dt_features", "dt_target", "dt_task_saved", "dt_version_id", "dt_last_prediction"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除决策树模型！")
 
 # Prediction
-st.subheader("🎯 新数据预测")
+render_section_header("新数据预测", "使用当前激活版本进行单条预测。")
 if "dt_result" not in st.session_state:
     st.warning("请先训练模型！")
 else:
@@ -208,6 +226,43 @@ else:
         result = predict_decision_tree(input_data, task_str, version_id=st.session_state.get("dt_version_id"))
         if result:
             if predict_is_cls:
+                st.session_state.dt_last_prediction = {
+                    "main": str(result["pred_class"]),
+                    "details": [
+                        ("任务", "分类"),
+                        ("预测目标", st.session_state.get("dt_target", "")),
+                        ("置信度", f"{result.get('prob', 0):.4f}" if result.get("prob") is not None else "暂无"),
+                        ("模型版本", (st.session_state.get("dt_version_id") or "当前激活版本")[:24]),
+                    ],
+                    "task": "classification",
+                    "probabilities": result.get("all_probs", []),
+                    "probability_labels": result.get("label_names", []),
+                }
                 st.toast(f"🎯 预测类别：{result['pred_class']}", icon="✅")
             else:
+                st.session_state.dt_last_prediction = {
+                    "main": f"{result['pred_value']:.4f}",
+                    "details": [
+                        ("任务", "回归"),
+                        ("预测目标", st.session_state.get("dt_target", "")),
+                        ("模型版本", (st.session_state.get("dt_version_id") or "当前激活版本")[:24]),
+                    ],
+                    "task": "regression",
+                }
                 st.toast(f"🎯 预测结果：{result['pred_value']:.4f}", icon="✅")
+
+    if st.session_state.get("dt_last_prediction"):
+        pred = st.session_state.dt_last_prediction
+        if isinstance(pred, dict):
+            render_stable_prediction_panel(
+                "预测结果",
+                pred["main"],
+                details=pred["details"],
+                model_status=status,
+                fallback_result=st.session_state.get("dt_result"),
+                probabilities=pred.get("probabilities"),
+                probability_labels=pred.get("probability_labels"),
+                mismatch_message=task_mismatch_message("决策树", st.session_state.dt_task_type, st.session_state.get("dt_task_saved")),
+            )
+        else:
+            st.session_state.pop("dt_last_prediction", None)

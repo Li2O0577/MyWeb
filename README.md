@@ -28,6 +28,7 @@
 - **Streamlit** 负责 UI 和数据预处理：页面布局、Plotly 图表、数据加载、特征工程（缩放/编码/PCA）
 - **Flask** 负责 ML 计算和会话管理：数据解析、模型训练、推理预测、LLM 代理
 - 前后端通过 HTTP JSON 通信，Flask 无状态（session 数据 TTL 1 小时）
+- ML/LLM/数据处理页面共用统一页头、顶部状态条、区块标题、工作台概况、稳定预测结果面板和风险提示样式，减少页面间体验差异
 
 ## 快速开始
 
@@ -102,7 +103,7 @@ streamlit run main.py
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `FLASK_PORT` | `5001` | Flask 后端端口 |
-| `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（有安全风险，仅开发用） |
+| `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（有安全风险，仅开发用；默认不向前端暴露 500 内部异常细节） |
 | `INDETERMINATE_API_BASE` | `http://127.0.0.1:5001/api` | 前端 API 地址 |
 | `LLM_API_KEY` | 无 | LLM 默认 API 密钥，设置后前端无需手动填写 |
 | `LLM_ALLOW_LOCAL_API_BASE` | `0` | 设为 `1` 才允许 LLM API Base 使用 localhost/私网地址，仅建议本地开发使用 |
@@ -149,7 +150,8 @@ MyWeb1/
 ├── pages/                       # Streamlit 页面
 │   ├── _api.py                  # Flask API 客户端（所有后端调用集中管理）
 │   ├── _prepare.py              # 公共组件（数据上传、侧边栏导航，detect_outliers 从 backend 导入）
-│   ├── _mlp_common.py           # MLP UI 工具（设备选择器、损失曲线、输入校验）
+│   ├── _mlp_common.py           # ML UI 工具（工作台概况、预测结果面板、设备选择、损失曲线、输入校验）
+│   ├── _ui_common.py            # 统一页头、状态条、区块标题、键值面板、预测面板和提示样式
 │   ├── 1_data_load.py           # 数据加载 + IQR 异常值修复
 │   ├── 2_data_visualization.py  # 12 种交互式图表（Plotly）
 │   ├── 3_data_processing.py     # 数据处理：标准化/归一化/PCA/编码
@@ -246,7 +248,7 @@ MyWeb1/
 - 行列筛选/增减/重命名、类型转换
 - StandardScaler / MinMaxScaler、PCA 降维
 - 标签编码 / 独热编码、高斯噪声
-- 自定义计算列：简单计算（一元/二元运算）+ 自定义表达式（`df.eval`）
+- 自定义计算列：简单计算（一元/二元运算）+ 自定义表达式；表达式只允许数值列、数字、括号和基础算术运算，禁止函数调用和对象属性访问
 
 ### ML 模块 (Page 4–8)
 - **回归**：PyTorch MLP，R²/MAE/RMSE，损失曲线
@@ -255,31 +257,34 @@ MyWeb1/
 - **决策树**：Pipeline 预处理，规则可视化，节点详情
 - **聚类**：K-means + DBSCAN，肘部法则，轮廓系数，PCA 可视化
 - **统一体验**：各 ML 页面顶部统一展示当前数据集、后端同步状态、当前模型版本
+- **训练工作台**：Page 4-8 统一展示“训练数据 / 训练准备 / 当前模型版本”三栏概况，减少页面间认知差异
+- **稳定预测面板**：单条预测结果固定保留在页面内；回归显示预测值和当前模型指标，分类/DIY/决策树显示预测类别、置信度和类别概率表，聚类显示簇编号和簇说明
 - **风险提示**：小数据集、类别不均衡、类别过多、常量特征等风险使用统一提示样式
 - **预测校验**：单条/批量预测会提前检查特征数量、空值、无穷值和非数值输入
+- **预测返回语义**：分类和 DIY MLP 的二分类 `prob` 表示预测类别置信度，并额外返回 `all_probs`/`label_names` 供前端概率表展示；决策树分类预测返回 `predict_proba` 概率表
 
 ### 大模型分析 (Page 9)
 - **Smart 模式**：发送数据摘要（自动截断至 8000 字符），AI 推荐分析方向
-- **Direct 模式**：发送原始数据，AI 自定义分析
+- **Direct 模式**：发送原始数据，AI 自定义分析；为避免请求过大，最多发送 1000 行且 CSV 约 512KB
 - **Agent 模式**：AI 通过 function calling 自主调用平台工具
   - 支持 8 种工具：数据概览、列详情、回归训练、分类训练、聚类分析、相关性分析、**图表生成**（散点图/直方图/热力图等 8 种）、**代码解释器**（子进程沙箱执行 Python 代码）
   - AI 自动选择工具、执行分析、绘制图表、编写代码，图表和代码输出**内嵌显示在对话中**
   - 最多 10 轮迭代、12 次工具调用；工具参数会自动清洗和限幅
-  - 代码解释器使用子进程隔离，30 秒超时，限制 10000 字符代码长度
+  - 代码解释器使用子进程隔离，30 秒超时，限制 10000 字符代码长度、最多 5000 行/80 列输入、最多返回 5 张图片且单张图片约 8MB 上限
   - 需要支持 function calling 的模型
 - 现代化聊天 UI：原生 Streamlit 组件，Markdown 渲染，图片内嵌显示
-- SSE 流式响应，实时打字机效果
+- SSE 流式响应，实时打字机效果；常见 LLM/Agent 错误码会在前端转换为中文用户提示
 - API Base 白名单（OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等）+ `LLM_API_KEY` 环境密钥支持；localhost/私网地址默认禁用，可用 `LLM_ALLOW_LOCAL_API_BASE=1` 在本地开发时开启
 
 ## 安全设计
 
-- **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启
+- **Debug 模式**：默认关闭，通过 `FLASK_DEBUG=1` 手动开启；默认 500 错误不向前端返回内部异常 detail
 - **LLM 代理**：API Base 域名白名单，防止 SSRF 攻击；Agent 模式下工具执行均在服务端完成，LLM 不直接访问数据文件
 - **本地 API Base 开关**：localhost/私网 LLM API Base 默认不允许，避免部署环境 SSRF；仅本地开发时设置 `LLM_ALLOW_LOCAL_API_BASE=1`
 - **文件上传**：256MB 硬限制，防止内存耗尽
 - **Session 存储**：Parquet + JSON 替代 pickle，旧 `.pkl` session 通过 `RestrictedUnpickler`（模块白名单）安全迁移后删除
 - **模型序列化**：StandardScaler / KMeans 参数用 `np.savez` 保存（`.npz` 格式，零代码执行）；DecisionTree Pipeline 等复杂对象经 `RestrictedUnpickler` 加载，仅允许 sklearn/numpy/pandas/pyarrow 模块
-- **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围；代码解释器使用**三层沙箱**（AST 预验证 → `exec()` 受限内置函数 → 子进程隔离 + 30s 超时），拦截 `import/eval/exec/open/__class__` 等攻击；Agent 训练自动调用完整的训练前校验（缺失率/类别数/特征合法性），与路由层一致；代码执行失败时返回结构化中文错误
+- **LLM Agent 护栏**：限制消息长度、对话条数、工具调用次数和工具参数范围；Direct 模式限制原始数据大小；代码解释器使用**三层沙箱**（AST 预验证 → `exec()` 受限内置函数 → 子进程隔离 + 30s 超时），拦截 `import/eval/exec/open/__class__` 等攻击，并限制输入数据量、图片数量和图片大小；Agent 训练自动调用完整的训练前校验（缺失率/类别数/特征合法性），与路由层一致；代码执行失败时返回结构化中文错误
 
 ## 开发者
 

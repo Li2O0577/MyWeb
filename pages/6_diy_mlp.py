@@ -3,18 +3,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_small_dataset_warning, render_class_balance_warning, render_risk_notice
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning, render_class_balance_warning, render_risk_notice, task_mismatch_message
 from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel, list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version
+from pages._ui_common import render_page_header, render_section_header
 
 st.set_page_config(page_title="自定义 MLP", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/6_diy_mlp.py")
-st.title("🛠️ 自定义神经网络")
+render_page_header("自定义神经网络", "配置 MLP 网络结构，支持分类和回归两类任务。")
 
 backend_status_badge()
 device = render_device_selector()
 
-with st.expander("📢 功能介绍", expanded=False):
+with st.expander("功能介绍", expanded=False):
     st.markdown("""
     ### 自定义神经网络构建器
     1. **自由设计**：自行添加隐藏层，设定每层神经元数、激活函数、批归一化、Dropout
@@ -43,7 +44,7 @@ numeric_df.columns = numeric_df.columns.astype(str)
 all_num_cols = list(numeric_df.columns)
 all_cols = list(df.columns)
 
-st.subheader("📊 任务配置")
+render_section_header("任务配置", "选择任务类型、目标列和输入特征。")
 task_col1, task_col2 = st.columns(2)
 with task_col1:
     task_type = st.selectbox("任务类型", ["回归 (Regression)", "分类 (Classification)"], index=0)
@@ -108,8 +109,23 @@ if "diy_result" not in st.session_state or st.session_state.get("diy_version_id"
 current_task_str = "classification" if "分类" in task_type else "regression"
 render_task_mismatch_warning("DIY MLP", current_task_str, st.session_state.get("diy_task"))
 
+render_ml_workbench_overview(
+    "DIY MLP",
+    df_clean,
+    backend_synced=backend_synced,
+    model_status=status,
+    task_text="分类" if current_task_str == "classification" else "回归",
+    target_text=str(target_col),
+    feature_count=n_features,
+    sample_count=n_samples,
+    extra_items=[
+        ("类别数", f"{n_classes} 个" if n_classes is not None else "不适用"),
+        ("设备", str(device)),
+    ],
+)
+
 # ── Layer builder UI ──
-st.subheader("🧱 网络结构设计")
+render_section_header("网络结构设计", "逐层配置神经元数量、激活函数、Dropout 和 BatchNorm。")
 st.caption("自定义隐藏层。输入层和输出层会根据数据和任务自动生成。")
 
 if "diy_layers" not in st.session_state:
@@ -157,7 +173,7 @@ with btn_col2:
         st.rerun()
 
 # Architecture summary
-st.subheader("📐 网络结构摘要")
+render_section_header("网络结构摘要", "检查当前网络深度、参数规模和潜在训练风险。")
 layer_dims = [n_features]
 for layer in st.session_state.diy_layers:
     layer_dims.append(layer["neurons"])
@@ -205,7 +221,7 @@ for w in warnings: st.warning(w)
 if not warnings: st.success("✅ 网络规模与数据量匹配良好。")
 
 # Training params
-st.subheader("⚡ 训练参数")
+render_section_header("训练参数", "设置优化器、学习率、训练轮数、batch size 和早停策略。")
 hp_col1, hp_col2, hp_col3, hp_col4 = st.columns(4)
 with hp_col1:
     learning_rate = st.selectbox("学习率 (LR)", [0.01, 0.005, 0.001, 0.0005, 0.0001], index=1)
@@ -220,7 +236,7 @@ val_split = st.slider("验证集比例", 0.1, 0.4, 0.2, 0.05)
 patience = st.slider("早停耐心 (轮)", 5, 50, 15, 5)
 
 # Training
-st.subheader("🚀 模型训练")
+render_section_header("模型训练", "启动训练或清除当前 DIY MLP 模型。")
 train_col, clear_col = st.columns(2)
 
 with train_col:
@@ -269,12 +285,12 @@ with train_col:
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
         clear_diy_mlp()
-        for k in ["diy_result", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map", "diy_version_id"]:
+        for k in ["diy_result", "diy_features", "diy_target", "diy_task", "diy_n_classes", "diy_reverse_label_map", "diy_version_id", "diy_last_prediction"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除所有保存的模型！")
 
 # Prediction
-st.subheader("🎯 数据预测")
+render_section_header("数据预测", "使用当前激活版本进行单条预测。")
 if "diy_result" not in st.session_state:
     st.warning("请先完成模型训练！")
 else:
@@ -311,23 +327,55 @@ else:
                 result = predict_diy_mlp(input_data, device_str, version_id=version_id)
                 if result:
                     if task == "regression":
+                        st.session_state.diy_last_prediction = {
+                            "main": f"{result['result']:.4f}",
+                            "details": [
+                                ("任务", "回归"),
+                                ("预测目标", target),
+                                ("模型版本", (version_id or "当前激活版本")[:24]),
+                            ],
+                            "task": "regression",
+                        }
                         st.toast(f"预测结果：**{result['result']:.4f}**", icon="✅")
                     else:
                         n_cls = st.session_state.diy_n_classes
                         reverse_label_map = st.session_state.diy_reverse_label_map
                         pred_idx = result["pred_idx"]
-                        pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
+                        pred_class = result.get("pred_class") or reverse_label_map.get(str(pred_idx), pred_idx)
+                        probs = result.get("all_probs", [])
+                        labels = result.get("label_names") or [reverse_label_map.get(str(i), i) for i in range(len(probs))]
+                        st.session_state.diy_last_prediction = {
+                            "main": str(pred_class),
+                            "details": [
+                                ("任务", "分类"),
+                                ("预测目标", target),
+                                ("置信度", f"{result['prob']:.4f}"),
+                                ("模型版本", (version_id or "当前激活版本")[:24]),
+                            ],
+                            "task": "classification",
+                            "probabilities": probs,
+                            "probability_labels": labels,
+                        }
                         st.toast(f"预测类别：**{pred_class}** | 置信度：**{result['prob']:.4f}**", icon="✅")
-                        if n_cls > 2 and "all_probs" in result:
-                            st.write("各类别概率：")
-                            prob_df = pd.DataFrame({
-                                "类别": [reverse_label_map.get(str(i), i) for i in range(n_cls)],
-                                "概率": result["all_probs"]
-                            }).sort_values("概率", ascending=False)
-                            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+
+    if st.session_state.get("diy_last_prediction"):
+        pred = st.session_state.diy_last_prediction
+        if isinstance(pred, dict):
+            render_stable_prediction_panel(
+                "预测结果",
+                pred["main"],
+                details=pred["details"],
+                model_status=status,
+                fallback_result=st.session_state.get("diy_result"),
+                probabilities=pred.get("probabilities"),
+                probability_labels=pred.get("probability_labels"),
+                mismatch_message=task_mismatch_message("DIY MLP", current_task_str, st.session_state.get("diy_task")),
+            )
+        else:
+            st.session_state.pop("diy_last_prediction", None)
 
     st.divider()
-    st.subheader("📦 批量预测")
+    render_section_header("批量预测", "上传包含相同特征列的 CSV 文件并批量生成预测结果。")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="diy_batch")
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)

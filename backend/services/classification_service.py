@@ -230,14 +230,26 @@ def predict_one(feature_values, device_str="cpu", version_id=None):
     with torch.no_grad():
         output = model(input_tensor)
         if n_classes == 2:
-            prob = float(torch.sigmoid(output).squeeze().item())
-            pred_idx = 1 if prob > 0.5 else 0
+            positive_prob = float(torch.sigmoid(output).squeeze().item())
+            pred_idx = 1 if positive_prob > 0.5 else 0
+            prob = positive_prob if pred_idx == 1 else 1 - positive_prob
+            all_probs = [1 - positive_prob, positive_prob]
         else:
             probs = torch.softmax(output, dim=1).cpu().numpy()[0]
             prob = float(probs.max())
             pred_idx = int(np.argmax(probs))
+            all_probs = probs.tolist()
 
-    return {"pred_idx": pred_idx, "prob": prob}, None
+    reverse_label_map = config.get("reverse_label_map", {})
+    pred_class = reverse_label_map.get(str(pred_idx), pred_idx)
+    label_names = [str(reverse_label_map.get(str(i), i)) for i in range(n_classes)]
+    return {
+        "pred_idx": pred_idx,
+        "pred_class": str(pred_class),
+        "prob": prob,
+        "all_probs": all_probs,
+        "label_names": label_names,
+    }, None
 
 
 MAX_BATCH_SIZE = 10000

@@ -37,6 +37,8 @@ _MAX_AGENT_TRAIN_ROWS = 5000
 _MAX_CODE_INTERPRETER_ROWS = 5000
 _MAX_CODE_INTERPRETER_COLS = 80
 _MAX_CODE_INTERPRETER_CSV_BYTES = 5 * 1024 * 1024
+_MAX_CODE_INTERPRETER_IMAGES = 5
+_MAX_CODE_INTERPRETER_IMAGE_B64_CHARS = 8 * 1024 * 1024
 
 
 def _validate_model_name(model):
@@ -786,14 +788,25 @@ if _SANDBOX_ACTIVE:
 
 # ── Figure capture ──
 _captured_figures = []
+_figure_warnings = []
+_MAX_CAPTURED_FIGURES = 5
+_MAX_FIGURE_B64_CHARS = 8 * 1024 * 1024
 
 def _capture_figure(fig=None):
     fig = fig or plt.gcf()
     if fig.get_axes():
+        if len(_captured_figures) >= _MAX_CAPTURED_FIGURES:
+            _figure_warnings.append(f"已达到图片数量上限 {_MAX_CAPTURED_FIGURES} 张，后续图片已跳过。")
+            plt.close(fig)
+            return
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
         buf.seek(0)
-        _captured_figures.append(base64.b64encode(buf.read()).decode("utf-8"))
+        encoded = base64.b64encode(buf.read()).decode("utf-8")
+        if len(encoded) > _MAX_FIGURE_B64_CHARS:
+            _figure_warnings.append("有一张图片过大，已跳过。")
+        else:
+            _captured_figures.append(encoded)
     plt.close(fig)
 
 _original_show = plt.show
@@ -837,6 +850,8 @@ else:
 # ── Output figures ──
 if _captured_figures:
     print("__FIGURES__:" + _json.dumps(_captured_figures))
+if _figure_warnings:
+    print("__FIGURE_WARNINGS__:" + _json.dumps(list(dict.fromkeys(_figure_warnings))))
 
 # ── Cleanup ──
 try:
@@ -920,6 +935,7 @@ def _execute_code_in_subprocess(code, df, timeout=30):
         stdout, stderr = proc.stdout, proc.stderr
 
         figures = []
+        figure_warnings = []
         clean_lines = []
         for line in stdout.split('\n'):
             if line.startswith('__FIGURES__:'):
@@ -927,13 +943,25 @@ def _execute_code_in_subprocess(code, df, timeout=30):
                     figures = json.loads(line[len('__FIGURES__:'):])
                 except json.JSONDecodeError:
                     pass
+            elif line.startswith('__FIGURE_WARNINGS__:'):
+                try:
+                    figure_warnings.extend(json.loads(line[len('__FIGURE_WARNINGS__:'):]))
+                except json.JSONDecodeError:
+                    pass
             else:
                 clean_lines.append(line)
         clean_stdout = '\n'.join(clean_lines).strip()
         clean_stderr = stderr.strip()
 
-        images = [{"base64": fig, "title": "Code Output", "alt": f"Figure {i+1}"}
-                   for i, fig in enumerate(figures)]
+        images = []
+        for fig in figures:
+            if len(images) >= _MAX_CODE_INTERPRETER_IMAGES:
+                figure_warnings.append(f"已达到图片数量上限 {_MAX_CODE_INTERPRETER_IMAGES} 张，后续图片已跳过。")
+                break
+            if not isinstance(fig, str) or len(fig) > _MAX_CODE_INTERPRETER_IMAGE_B64_CHARS:
+                figure_warnings.append("有一张图片过大或格式异常，已跳过。")
+                continue
+            images.append({"base64": fig, "title": "Code Output", "alt": f"Figure {len(images)+1}"})
 
         text_parts = []
         if sampled:
@@ -944,6 +972,8 @@ def _execute_code_in_subprocess(code, df, timeout=30):
             text_parts.append(clean_stdout[:4000])
         if clean_stderr:
             text_parts.append(f"\n\n**stderr:**\n```\n{clean_stderr[:2000]}\n```")
+        if figure_warnings:
+            text_parts.append("\n\n".join(f"提示：{w}" for w in dict.fromkeys(figure_warnings)))
         if not text_parts and not images:
             text_parts.append("代码执行完毕，无输出。")
 

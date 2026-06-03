@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import data_uploader, render_sidebar
+from pages._ui_common import render_page_header, render_section_header, render_status_strip
 from backend.services.data_service import detect_outliers
 
 st.set_page_config(page_title="数据加载", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/1_data_load.py")
-st.title("📊 数据加载")
+render_page_header("数据加载", "上传 CSV/Excel 数据，检查缺失值和异常值，并保存为当前工作数据集。")
 
 
 def _apply_fix(df):
@@ -224,7 +225,7 @@ if df is not None:
                 st.divider()
 
     # ── Data preview ──
-    st.subheader("📋 数据预览")
+    render_section_header("数据预览", "查看当前数据集并保存为后续页面使用的数据。")
     if total_outliers > 0 or total_nans > 0:
         c_info, c_preview = st.columns([3, 1])
         with c_info:
@@ -243,6 +244,11 @@ st.divider()
 if df is None:
     st.info("请先上传数据，才能进行后续的可视化、处理和建模等操作（支持 CSV 和 Excel）。")
 else:
+    render_status_strip([
+        ("当前数据集", f"{len(df)} 行 · {len(df.columns)} 列"),
+        ("缺失值", f"{int(df.isna().sum().sum())} 个"),
+        ("后端同步状态", f"session {str(st.session_state.get('session_id', ''))[:12]}" if st.session_state.get("session_id") else "尚未同步到后端"),
+    ])
     if st.session_state.get("_data_cleaned", False):
         c_msg, c_btn = st.columns([3, 1])
         with c_msg:

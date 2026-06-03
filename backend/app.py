@@ -96,7 +96,8 @@ def too_large(_err):
 
 @app.errorhandler(500)
 def internal_error(err):
-    return api_error("INTERNAL_ERROR", "后端处理时出现内部错误", 500, str(err))
+    detail = str(err) if os.environ.get("FLASK_DEBUG", "0") == "1" else "请查看后端终端日志获取详细原因。"
+    return api_error("INTERNAL_ERROR", "后端处理时出现内部错误", 500, detail)
 
 
 if __name__ == "__main__":

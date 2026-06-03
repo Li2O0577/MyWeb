@@ -3,18 +3,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_small_dataset_warning
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning
 from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel, list_regression_versions, activate_regression_version, delete_regression_version
+from pages._ui_common import render_page_header, render_section_header
 
 st.set_page_config(page_title="回归预测", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/4_regression.py")
-st.title("🧠 回归预测")
+render_page_header("回归预测", "训练连续值预测模型，并通过当前激活版本完成单条或批量预测。")
 
 backend_status_badge()
 device = render_device_selector()
 
-with st.expander("📢 功能介绍", expanded=True):
+with st.expander("功能介绍", expanded=False):
     st.markdown("""
     ### 智能神经网络回归预测
     1. **任务说明**：预测**连续数值**（价格、销量、温度、浓度等）
@@ -58,7 +59,7 @@ if "reg_result" not in st.session_state or st.session_state.get("reg_version_id"
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.success(f"已加载模型版本（{ds} | {created} | 目标列：{st.session_state.reg_target}）")
 
-st.subheader("📊 数据自动分析与模型配置")
+render_section_header("训练配置", "选择目标列和特征列，系统会提示样本量和常量特征风险。")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -81,7 +82,19 @@ with col2:
     else:
         st.caption(f"大数据集 → 深层网络 (h1={n_features*3}, h2={n_features*2}, dropout=0.3)")
 
-st.subheader("⚡ 训练参数")
+render_ml_workbench_overview(
+    "回归",
+    numeric_df,
+    backend_synced=backend_synced,
+    model_status=status,
+    task_text="回归",
+    target_text=str(target_col),
+    feature_count=n_features,
+    sample_count=n_samples,
+    extra_items=[("设备", str(device)), ("Batch", "训练参数中设置")],
+)
+
+render_section_header("训练参数", "设置学习率、训练轮数和 batch size。")
 hp_col1, hp_col2, hp_col3 = st.columns(3)
 with hp_col1:
     learning_rate = st.selectbox("学习率 (LR)", [0.01, 0.005, 0.001, 0.0005, 0.0001], index=2)
@@ -90,7 +103,7 @@ with hp_col2:
 with hp_col3:
     batch_size = st.selectbox("批次大小", [4, 8, 16, 32, 64, 128], index=1)
 
-st.subheader("🚀 模型训练")
+render_section_header("模型训练", "启动训练或清除当前回归模型。")
 train_col, clear_col = st.columns(2)
 
 with train_col:
@@ -121,12 +134,12 @@ with train_col:
 with clear_col:
     if st.button("清除已保存模型", use_container_width=True):
         clear_regression()
-        for k in ["reg_result", "reg_features", "reg_target", "reg_version_id"]:
+        for k in ["reg_result", "reg_features", "reg_target", "reg_version_id", "reg_last_prediction"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.warning("已清除所有保存的模型！")
 
-st.subheader("🎯 数据预测")
+render_section_header("数据预测", "使用当前激活版本进行单条预测。")
 if "reg_result" not in st.session_state:
     st.warning("请先训练模型！")
 else:
@@ -149,10 +162,30 @@ else:
         else:
             result = predict_regression(input_data, device_str, version_id=version_id)
             if result and "result" in result:
+                st.session_state.reg_last_prediction = {
+                    "main": f"{result['result']:.4f}",
+                    "details": [
+                        ("预测目标", target),
+                        ("模型版本", (version_id or "当前激活版本")[:24]),
+                    ],
+                }
                 st.toast(f"预测结果：{result['result']:.4f}", icon="✅")
 
+    if st.session_state.get("reg_last_prediction"):
+        pred = st.session_state.reg_last_prediction
+        if isinstance(pred, dict):
+            render_stable_prediction_panel(
+                "预测结果",
+                pred["main"],
+                details=pred["details"],
+                model_status=status,
+                fallback_result=st.session_state.get("reg_result"),
+            )
+        else:
+            st.session_state.pop("reg_last_prediction", None)
+
     st.divider()
-    st.subheader("📦 批量预测")
+    render_section_header("批量预测", "上传包含相同特征列的 CSV 文件并批量生成预测结果。")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="reg_batch")
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)

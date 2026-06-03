@@ -4,17 +4,18 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_version_selector, validate_input_array, render_ml_status_bar, render_small_dataset_warning
+from pages._mlp_common import cluster_explanation, render_version_selector, validate_input_array, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning
 from pages._api import train_clustering, elbow_clustering, predict_clustering, clear_clustering, ensure_session, clustering_status, backend_status_badge, render_backend_sync_panel, list_clustering_versions, activate_clustering_version, delete_clustering_version
+from pages._ui_common import render_metric_row, render_page_header, render_section_header
 
 st.set_page_config(page_title="聚类分析", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/8_clustering.py")
-st.title("🧪 聚类分析")
+render_page_header("聚类分析", "使用 K-means 或 DBSCAN 发现数据分组，并管理聚类模型版本。")
 
 backend_status_badge()
 
-with st.expander("📢 功能介绍", expanded=True):
+with st.expander("功能介绍", expanded=False):
     st.markdown("""
     ### 无监督聚类模型 — K-means & DBSCAN
     1. **双算法支持**：K-means（球状簇、需预设 K）+ DBSCAN（任意形状、自动发现簇数、识别噪声）
@@ -60,7 +61,7 @@ if st.session_state.get("cluster_version_id") != current_vid:
         created = status.get("created_at", "")[:16].replace("T", " ")
         st.info(f"📦 已加载聚类模型版本（{ds} | {created} | {algo}）。重新训练以查看聚类结果。")
 
-st.subheader("⚙️ 算法选择与参数配置")
+render_section_header("算法配置", "选择聚类算法、特征列和核心参数。")
 alg_col, *param_cols = st.columns([1, 1, 1, 2])
 with alg_col:
     algorithm = st.selectbox("聚类算法", ["K-means", "DBSCAN"],
@@ -78,7 +79,7 @@ if is_kmeans:
         st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征 | K={n_clusters}")
 
     st.divider()
-    st.subheader("📈 肘部法则 — 选择最优 K 值")
+    render_section_header("肘部法则", "计算不同 K 值的惯性，用于辅助选择聚类数量。")
     max_k_limit = min(15, max(3, n_samples // 3))
     elbow_col1, elbow_col2 = st.columns([1, 3])
     with elbow_col1:
@@ -111,9 +112,26 @@ else:
     st.info(f"✅ 数据：{n_samples} 行 | {n_features} 个特征 | ε={eps} | min_samples={min_samples}")
     st.caption("💡 DBSCAN 自动发现簇数量，无需预设 K。标签为 -1 的点为噪声。")
 
+if is_kmeans:
+    cluster_extra_items = [("算法", "K-means"), ("K", n_clusters)]
+else:
+    cluster_extra_items = [("算法", "DBSCAN"), ("eps/min_samples", f"{eps} / {min_samples}")]
+
+render_ml_workbench_overview(
+    "聚类",
+    numeric_df,
+    backend_synced=backend_synced,
+    model_status=status,
+    task_text="无监督聚类",
+    target_text="无目标列",
+    feature_count=n_features,
+    sample_count=n_samples,
+    extra_items=cluster_extra_items,
+)
+
 st.divider()
 
-st.subheader("🚀 模型训练")
+render_section_header("模型训练", "训练聚类模型或清除当前聚类结果。")
 train_col, clear_col = st.columns(2)
 
 with train_col:
@@ -151,11 +169,11 @@ with train_col:
 with clear_col:
     if st.button("清除已保存聚类模型", use_container_width=True):
         clear_clustering()
-        for k in ["cluster_result", "cluster_features", "elbow_result", "cluster_version_id"]:
+        for k in ["cluster_result", "cluster_features", "elbow_result", "cluster_version_id", "cluster_last_prediction"]:
             if k in st.session_state: del st.session_state[k]
         st.warning("已清除聚类模型！")
 
-st.subheader("📈 聚类结果展示")
+render_section_header("聚类结果", "查看聚类分布、轮廓系数和二维可视化。")
 if st.session_state.get("cluster_result"):
     data = st.session_state.cluster_result
     feature_cols = st.session_state.cluster_features
@@ -165,10 +183,12 @@ if st.session_state.get("cluster_result"):
     st.markdown("#### 簇样本数量统计")
     st.dataframe(count_df, use_container_width=True)
 
+    result_metrics = []
     if data.get("silhouette"):
-        st.metric("轮廓系数 (Silhouette Score)", f"{data['silhouette']:.4f}")
+        result_metrics.append(("轮廓系数", f"{data['silhouette']:.4f}"))
     if data.get("inertia"):
-        st.metric("惯性值 (Inertia)", f"{data['inertia']:,.2f}")
+        result_metrics.append(("惯性值", f"{data['inertia']:,.2f}"))
+    render_metric_row(result_metrics)
 
     st.markdown("#### 聚类分布可视化")
     pca = data["pca"]
@@ -190,7 +210,7 @@ if st.session_state.get("cluster_result"):
     st.plotly_chart(fig_cluster, use_container_width=True)
 
 # Prediction (K-means only)
-st.subheader("🎯 聚类预测")
+render_section_header("聚类预测", "使用当前 K-means 版本预测新样本所属簇。")
 if not st.session_state.get("cluster_result"):
     st.warning("请先训练模型！")
 elif data.get("algorithm") != "kmeans":
@@ -219,4 +239,27 @@ else:
         else:
             result = predict_clustering(input_data, version_id=st.session_state.get("cluster_version_id"))
             if result and "cluster" in result:
+                cluster_id = result["cluster"]
+                st.session_state.cluster_last_prediction = {
+                    "main": f"簇 {cluster_id}",
+                    "details": [
+                        ("算法", "K-means"),
+                        ("簇说明", cluster_explanation(cluster_id, st.session_state.get("cluster_result"))),
+                        ("模型版本", (st.session_state.get("cluster_version_id") or "当前激活版本")[:24]),
+                    ],
+                }
                 st.toast(f"🎯 预测结果：该数据属于 **簇 {result['cluster']}**", icon="✅")
+
+    if st.session_state.get("cluster_last_prediction"):
+        pred = st.session_state.cluster_last_prediction
+        if isinstance(pred, dict):
+            render_stable_prediction_panel(
+                "预测结果",
+                pred["main"],
+                details=pred["details"],
+                model_status=status,
+                fallback_result=st.session_state.get("cluster_result"),
+                description="聚类预测结果表示样本所属分组，簇编号不代表好坏或顺序。",
+            )
+        else:
+            st.session_state.pop("cluster_last_prediction", None)

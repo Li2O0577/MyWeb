@@ -5,11 +5,12 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from pages._prepare import render_sidebar, data_uploader
+from pages._ui_common import render_page_header, render_section_header, render_status_strip
 
 st.set_page_config(page_title="数据可视化", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/2_data_visualization.py")
-st.title("📈 数据可视化")
+render_page_header("数据可视化", "基于当前数据集快速生成常用探索图表。")
 
 df = data_uploader(upload_to_backend=False)
 
@@ -20,6 +21,12 @@ if df is not None:
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
     all_cols = df.columns.tolist()
+
+    render_status_strip([
+        ("当前数据集", f"{len(df)} 行 · {len(df.columns)} 列"),
+        ("数值列", f"{len(numeric_cols)} 列"),
+        ("类别列", f"{len(categorical_cols)} 列"),
+    ])
 
     if not numeric_cols:
         st.warning("未检测到数值列 — 部分图表类型将不可用。")
@@ -32,7 +39,7 @@ if df is not None:
     config_col, chart_col = st.columns([1, 2.5], gap="medium")
 
     with config_col:
-        st.subheader("⚙️ 图表设置")
+        render_section_header("图表设置", "选择图表字段、分组和视觉参数。")
         with st.expander("🎨 全局设置", expanded=True):
             chart_title = st.text_input("图表标题", value="")
             color_template = st.selectbox("配色模板", ["plotly", "plotly_white", "plotly_dark", "ggplot2", "seaborn", "simple_white", "presentation"], index=1)

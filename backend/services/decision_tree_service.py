@@ -167,6 +167,14 @@ def predict_one(input_dict, task_type, version_id=None):
     input_df = pd.DataFrame(input_dict)
     pred = pipeline.predict(input_df)[0]
     if task_type == "classification":
-        return {"pred_class": str(pred)}, None
+        result = {"pred_class": str(pred)}
+        if hasattr(pipeline, "predict_proba"):
+            probs = pipeline.predict_proba(input_df)[0]
+            tree = pipeline.named_steps.get("tree") if hasattr(pipeline, "named_steps") else None
+            labels = [str(c) for c in getattr(tree, "classes_", range(len(probs)))]
+            result["all_probs"] = [float(p) for p in probs]
+            result["label_names"] = labels
+            result["prob"] = float(max(probs)) if len(probs) else None
+        return result, None
     else:
         return {"pred_value": float(pred)}, None

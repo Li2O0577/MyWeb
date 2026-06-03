@@ -1,15 +1,17 @@
 """Data processing page — local operations with optional backend sync."""
+import ast
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
 from sklearn.decomposition import PCA
 from pages._prepare import render_sidebar, data_uploader
+from pages._ui_common import render_page_header, render_section_header, render_status_strip
 
 st.set_page_config(page_title="数据处理", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>[data-testid="stSidebarNav"] {display: none;}</style>""", unsafe_allow_html=True)
 render_sidebar("pages/3_data_processing.py")
-st.title("🧹 数据处理")
+render_page_header("数据处理", "清洗、转换和扩展当前数据集；保存后会同步到后端供训练页面使用。")
 
 # ── Version counter — incremented on undo/reset so all column-dependent widgets get fresh keys ──
 if "_processing_version" not in st.session_state:
@@ -19,6 +21,45 @@ _ver = st.session_state._processing_version
 def _k(name):
     """Return a versioned widget key."""
     return f"{name}_{_ver}"
+
+
+_ALLOWED_EXPR_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
+_ALLOWED_EXPR_UNARYOPS = (ast.UAdd, ast.USub)
+
+
+def _validate_formula_expr(expr, allowed_names):
+    """Allow only simple arithmetic over numeric columns."""
+    if len(expr) > 300:
+        return "表达式过长，请拆成多个计算列。"
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return "表达式语法不正确，请检查括号和运算符。"
+
+    allowed = {str(name) for name in allowed_names if str(name).isidentifier()}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expression):
+            continue
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, _ALLOWED_EXPR_BINOPS):
+                return "仅支持 +、-、*、/、//、%、** 这些运算符。"
+            continue
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, _ALLOWED_EXPR_UNARYOPS):
+                return "仅支持正负号作为一元运算。"
+            continue
+        if isinstance(node, ast.Name):
+            if node.id not in allowed:
+                return f"表达式中包含不可用列名或变量：{node.id}。"
+            continue
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                return "表达式中只能使用数字常量。"
+            continue
+        if isinstance(node, (ast.Load, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.UAdd, ast.USub)):
+            continue
+        return "表达式只允许数值列、数字、括号和基础算术运算，不能调用函数或访问对象属性。"
+    return None
 
 # ── Load data ──
 df_source = data_uploader(upload_to_backend=False)
@@ -43,6 +84,15 @@ if df is None:
     st.warning("请先在数据加载页面上传数据！")
     st.stop()
 
+saved_df = st.session_state.get("main_df")
+has_unsaved_changes = saved_df is not None and not df.equals(saved_df)
+session_id = st.session_state.get("session_id", "")
+render_status_strip([
+    ("当前工作数据", f"{len(df)} 行 · {len(df.columns)} 列"),
+    ("保存状态", "有未保存修改" if has_unsaved_changes else "已保存或未修改"),
+    ("后端同步状态", f"session {session_id[:12]}" if session_id else "尚未同步到后端"),
+])
+
 # Auto-detect column changes (PCA, encoding, undo, reset) and bump version
 _col_sig = hash(tuple(df.columns))
 if "_3_col_sig" not in st.session_state:
@@ -55,6 +105,7 @@ elif st.session_state._3_col_sig != _col_sig:
 # ═══════════════════════════════════════════════
 # 1. 基础行列操作
 # ═══════════════════════════════════════════════
+render_section_header("数据操作", "常用清洗和转换操作会先作用于当前工作数据，点击保存后才会写回主数据集。")
 with st.expander("1. 基础行列操作", expanded=True):
     st.subheader("行列筛选 / 增删 / 重命名")
     col1, col2 = st.columns(2)
@@ -104,7 +155,7 @@ if df.shape[1] == 0 or len(df) == 0:
 # ═══════════════════════════════════════════════
 # 2. 数据类型修改
 # ═══════════════════════════════════════════════
-with st.expander("2. 数据类型修改"):
+with st.expander("2. 数据类型修改", expanded=True):
     st.subheader("转换列的数据类型")
     type_col = st.selectbox("选择列", list(df.columns), key=_k("type_col"))
     type_choice = st.selectbox("目标类型", ["int", "float", "str", "datetime"], key=_k("type_choice"))
@@ -170,7 +221,7 @@ with st.expander("5. 添加数据噪声"):
 # ═══════════════════════════════════════════════
 # 6. 类别特征编码
 # ═══════════════════════════════════════════════
-with st.expander("6. 类别特征编码"):
+with st.expander("6. 类别特征编码", expanded=True):
     st.subheader("文字 → 数字")
     cat_cols = list(df.select_dtypes(exclude=[np.number]).columns)
     if len(cat_cols) == 0:
@@ -192,7 +243,7 @@ with st.expander("6. 类别特征编码"):
 # ═══════════════════════════════════════════════
 # 7. 自定义计算列
 # ═══════════════════════════════════════════════
-with st.expander("7. 自定义计算列"):
+with st.expander("7. 自定义计算列", expanded=True):
     st.subheader("添加新列（公式计算）")
     numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
     if len(numeric_cols) == 0:
@@ -255,13 +306,14 @@ with st.expander("7. 自定义计算列"):
                     st.toast("新列已添加！", icon="✅")
 
         else:  # 自定义表达式
-            st.caption("使用列名作为变量编写表达式，支持 + − × ÷ // % ** 和括号")
-            cols_hint = ", ".join(str(c) for c in numeric_cols)
+            st.caption("使用列名作为变量编写表达式，仅支持 + − × ÷ // % ** 和括号；不能调用函数或访问对象属性")
+            usable_expr_cols = [c for c in numeric_cols if str(c).isidentifier()]
+            cols_hint = ", ".join(str(c) for c in usable_expr_cols)
             st.caption(f"可用数值列: {cols_hint}")
-            invalid_ids = [c for c in numeric_cols if not str(c).isidentifier()]
-            if invalid_ids:
-                escaped = ", ".join(f"`{c}`" for c in invalid_ids)
-                st.caption(f"含特殊字符的列名需用反引号包裹: {escaped}")
+            unusable_expr_cols = [c for c in numeric_cols if not str(c).isidentifier()]
+            if unusable_expr_cols:
+                escaped = ", ".join(f"`{c}`" for c in unusable_expr_cols)
+                st.caption(f"这些列名含空格/符号，不能用于自定义表达式；可先重命名后再使用: {escaped}")
             c1, c2 = st.columns(2)
             with c1:
                 expression = st.text_area("表达式", placeholder="例如: (col_A + col_B) / col_C * 100", key=_k("expr"))
@@ -272,11 +324,15 @@ with st.expander("7. 自定义计算列"):
                 if not expr:
                     st.warning("请输入表达式")
                 else:
-                    try:
-                        df[new_col_name] = df.eval(expr, engine="python")
-                        st.toast("新列已添加！", icon="✅")
-                    except Exception as e:
-                        st.toast(f"表达式错误: {e}", icon="❌")
+                    expr_err = _validate_formula_expr(expr, numeric_cols)
+                    if expr_err:
+                        st.toast(expr_err, icon="❌")
+                    else:
+                        try:
+                            df[new_col_name] = df.eval(expr, engine="python")
+                            st.toast("新列已添加！", icon="✅")
+                        except Exception as e:
+                            st.toast(f"表达式错误: {e}", icon="❌")
 
 # ═══════════════════════════════════════════════
 # 8. PCA 降维
@@ -306,11 +362,11 @@ with st.expander("8. PCA 降维"):
 # Preview + Actions
 # ═══════════════════════════════════════════════
 st.divider()
-st.subheader("处理后数据预览")
+render_section_header("处理后数据预览", "检查当前工作数据，确认无误后保存。")
 st.dataframe(df, use_container_width=True)
 
 st.divider()
-st.subheader("操作控制")
+render_section_header("操作控制", "保存、重置、撤销或导出当前工作数据。")
 ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
 
 with ctrl1:
