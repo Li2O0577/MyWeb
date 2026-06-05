@@ -89,7 +89,13 @@ is_cls = (st.session_state.dt_task_type == "classification")
 render_small_dataset_warning(n_samples)
 
 # Version selector
-active_vid = render_version_selector("决策树", list_decision_tree_versions, activate_decision_tree_version, delete_decision_tree_version)
+active_vid = render_version_selector(
+    "决策树",
+    list_decision_tree_versions,
+    activate_decision_tree_version,
+    delete_decision_tree_version,
+    prediction_keys=["dt_last_prediction"],
+)
 
 # Auto-detect saved model — reloads when active version changes
 status = decision_tree_status()

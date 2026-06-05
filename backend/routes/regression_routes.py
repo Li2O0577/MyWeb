@@ -1,6 +1,9 @@
 """Regression training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_column_like, coerce_columns_like
+from routes._helpers import (
+    coerce_column_like, coerce_columns_like, numeric_prediction_error,
+    prediction_exception_message, prediction_service_error,
+)
 from routes._responses import missing_field, session_expired, service_error
 from routes._versioning import setup_version_routes
 from services.regression_service import train, predict_one, predict_batch
@@ -55,10 +58,15 @@ def predict():
     data = request.json or {}
     if "features" not in data:
         return missing_field("features")
-    result, err = predict_one(data["features"], data.get("device", "cpu"),
-                              version_id=data.get("version_id"))
+    if err := numeric_prediction_error(data["features"], "回归预测输入"):
+        return service_error("PREDICTION_FAILED", err, 400)
+    try:
+        result, err = predict_one(data["features"], data.get("device", "cpu"),
+                                  version_id=data.get("version_id"))
+    except Exception:
+        return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:
-        return service_error("MODEL_NOT_FOUND", err, 404)
+        return prediction_service_error(err)
     return jsonify(result)
 
 
@@ -67,10 +75,15 @@ def batch_predict():
     data = request.json or {}
     if "rows" not in data:
         return missing_field("rows")
-    result, err = predict_batch(data["rows"], data.get("device", "cpu"),
-                                version_id=data.get("version_id"))
+    if err := numeric_prediction_error(data["rows"], "回归批量预测输入", batch=True):
+        return service_error("PREDICTION_FAILED", err, 400)
+    try:
+        result, err = predict_batch(data["rows"], data.get("device", "cpu"),
+                                    version_id=data.get("version_id"))
+    except Exception:
+        return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:
-        return service_error("MODEL_NOT_FOUND", err, 404)
+        return prediction_service_error(err)
     return jsonify(result)
 
 

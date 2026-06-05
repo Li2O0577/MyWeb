@@ -1,6 +1,6 @@
 """Clustering training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_columns_like
+from routes._helpers import coerce_columns_like, numeric_prediction_error, prediction_exception_message
 from routes._responses import missing_field, missing_fields, session_expired, service_error
 from routes._versioning import setup_version_routes
 from services.clustering_service import train, elbow, predict_one
@@ -57,7 +57,12 @@ def predict():
     data = request.json or {}
     if "features" not in data:
         return missing_field("features")
-    result, err = predict_one(data["features"], version_id=data.get("version_id"))
+    if err := numeric_prediction_error(data["features"], "聚类预测输入"):
+        return service_error("PREDICTION_FAILED", err, 400)
+    try:
+        result, err = predict_one(data["features"], version_id=data.get("version_id"))
+    except Exception:
+        return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:
         return service_error("PREDICTION_FAILED", err, 400)
     return jsonify(result)

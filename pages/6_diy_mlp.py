@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning, render_class_balance_warning, render_risk_notice, task_mismatch_message
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_task_mismatch_warning, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning, render_class_balance_warning, render_risk_notice, task_mismatch_message, prepare_batch_prediction, render_batch_prediction_output
 from pages._api import train_diy_mlp, predict_diy_mlp, batch_predict_diy_mlp, clear_diy_mlp, ensure_session, diy_mlp_status, backend_status_badge, render_backend_sync_panel, list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version
 from pages._ui_common import render_page_header, render_section_header
 
@@ -80,7 +80,13 @@ render_small_dataset_warning(n_samples)
 check_constant_features(numeric_df, feature_cols)
 
 # Version selector
-active_vid = render_version_selector("DIY MLP", list_diy_mlp_versions, activate_diy_mlp_version, delete_diy_mlp_version)
+active_vid = render_version_selector(
+    "DIY MLP",
+    list_diy_mlp_versions,
+    activate_diy_mlp_version,
+    delete_diy_mlp_version,
+    prediction_keys=["diy_last_prediction"],
+)
 
 # Auto-detect saved model — reloads when active version changes
 status = diy_mlp_status()
@@ -378,28 +384,20 @@ else:
     render_section_header("批量预测", "上传包含相同特征列的 CSV 文件并批量生成预测结果。")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="diy_batch")
     if batch_file is not None:
-        batch_df = pd.read_csv(batch_file)
-        missing_cols = set(features) - set(batch_df.columns)
-        if missing_cols:
-            st.toast(f"缺少特征列：{missing_cols}", icon="❌")
+        batch_df, batch_X, batch_err = prepare_batch_prediction(batch_file, features, "DIY MLP 批量预测")
+        if batch_err:
+            st.toast(batch_err, icon="❌")
         else:
-            batch_X = batch_df[features].values
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             version_id = st.session_state.get("diy_version_id")
-            err = validate_input_array(batch_X, "批量预测", expected_features=len(features))
-            if err:
-                st.toast(err, icon="❌")
-            else:
-                result = batch_predict_diy_mlp(batch_X.tolist(), device_str, version_id=version_id)
-                if result:
-                    if task == "regression":
-                        result_df = batch_df.copy()
-                        result_df[f"预测_{target}"] = result["predictions"]
-                    else:
-                        reverse_label_map = st.session_state.diy_reverse_label_map
-                        result_df = batch_df.copy()
-                        result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in result["pred_indices"]]
-                        result_df["置信度"] = result["confidences"]
-                    st.dataframe(result_df, use_container_width=True)
-                    csv = result_df.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)
+            result = batch_predict_diy_mlp(batch_X.tolist(), device_str, version_id=version_id)
+            if result:
+                if task == "regression":
+                    result_df = batch_df.copy()
+                    result_df[f"预测_{target}"] = result["predictions"]
+                else:
+                    reverse_label_map = st.session_state.diy_reverse_label_map
+                    result_df = batch_df.copy()
+                    result_df["预测类别"] = [reverse_label_map.get(str(i), i) for i in result["pred_indices"]]
+                    result_df["置信度"] = result["confidences"]
+                render_batch_prediction_output(result_df, "diy_mlp_predictions.csv")

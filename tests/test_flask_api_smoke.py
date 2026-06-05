@@ -190,6 +190,27 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "INPUT_VALIDATION_FAILED")
         self.assertIn("过于接近样本数", payload["error"]["message"])
 
+    def test_predict_without_model_returns_model_not_found(self):
+        predict_resp = self.client.post("/api/regression/predict", json={
+            "features": [1.0, 2.0],
+            "device": "cpu",
+        })
+
+        self.assertEqual(predict_resp.status_code, 404)
+        payload = predict_resp.get_json()
+        self.assertEqual(payload["error"]["code"], "MODEL_NOT_FOUND")
+
+    def test_predict_invalid_payload_returns_prediction_failed(self):
+        predict_resp = self.client.post("/api/regression/predict", json={
+            "features": ["bad", 2.0],
+            "device": "cpu",
+        })
+
+        self.assertEqual(predict_resp.status_code, 400)
+        payload = predict_resp.get_json()
+        self.assertEqual(payload["error"]["code"], "PREDICTION_FAILED")
+        self.assertIn("非数值内容", payload["error"]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pages._prepare import render_sidebar, data_uploader
-from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning
+from pages._mlp_common import render_device_selector, check_constant_features, plot_loss_curve, validate_input_array, render_version_selector, render_ml_status_bar, render_ml_workbench_overview, render_stable_prediction_panel, render_small_dataset_warning, prepare_batch_prediction, render_batch_prediction_output
 from pages._api import train_regression, predict_regression, batch_predict_regression, clear_regression, ensure_session, regression_status, backend_status_badge, render_backend_sync_panel, list_regression_versions, activate_regression_version, delete_regression_version
 from pages._ui_common import render_page_header, render_section_header
 
@@ -38,7 +38,13 @@ if len(numeric_df) < 10 or len(numeric_df.columns) < 2:
 backend_synced = render_backend_sync_panel(numeric_df, compact=True)
 
 # Version selector
-active_vid = render_version_selector("回归", list_regression_versions, activate_regression_version, delete_regression_version)
+active_vid = render_version_selector(
+    "回归",
+    list_regression_versions,
+    activate_regression_version,
+    delete_regression_version,
+    prediction_keys=["reg_last_prediction"],
+)
 
 # Auto-detect saved model — reloads when active version changes
 status = regression_status()
@@ -188,22 +194,14 @@ else:
     render_section_header("批量预测", "上传包含相同特征列的 CSV 文件并批量生成预测结果。")
     batch_file = st.file_uploader("上传包含特征列的 CSV 文件", type=["csv"], key="reg_batch")
     if batch_file is not None:
-        batch_df = pd.read_csv(batch_file)
-        missing_cols = set(features) - set(batch_df.columns)
-        if missing_cols:
-            st.toast(f"缺少特征列：{missing_cols}", icon="❌")
+        batch_df, batch_X, batch_err = prepare_batch_prediction(batch_file, features, "回归批量预测")
+        if batch_err:
+            st.toast(batch_err, icon="❌")
         else:
-            batch_X = batch_df[features].values
             device_str = "cuda" if "CUDA" in str(device) else "cpu"
             version_id = st.session_state.get("reg_version_id")
-            err = validate_input_array(batch_X, "批量预测", expected_features=len(features))
-            if err:
-                st.toast(err, icon="❌")
-            else:
-                result = batch_predict_regression(batch_X.tolist(), device_str, version_id=version_id)
-                if result and "predictions" in result:
-                    result_df = batch_df.copy()
-                    result_df[f"预测_{target}"] = result["predictions"]
-                    st.dataframe(result_df, use_container_width=True)
-                    csv = result_df.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("📥 下载预测结果", csv, "predictions.csv", "text/csv", use_container_width=True)
+            result = batch_predict_regression(batch_X.tolist(), device_str, version_id=version_id)
+            if result and "predictions" in result:
+                result_df = batch_df.copy()
+                result_df[f"预测_{target}"] = result["predictions"]
+                render_batch_prediction_output(result_df, "regression_predictions.csv")

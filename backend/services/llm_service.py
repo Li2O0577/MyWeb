@@ -330,7 +330,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_chart",
-            "description": "创建数据可视化图表（matplotlib）并返回图片内嵌在对话中。支持散点图、折线图、柱状图、直方图、箱线图、相关性热力图、饼图、配对关系图。图表会自动显示在对话中供用户查看。",
+            "description": "创建数据可视化图表（matplotlib）并返回图片内嵌在对话中。支持散点图、折线图、柱状图、直方图、箱线图、相关性热力图、饼图、配对关系图。图表会自动显示在对话中供用户查看。图表标题必须使用英文，避免中文字体缺失。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -353,7 +353,7 @@ TOOLS = [
                     },
                     "title": {
                         "type": "string",
-                        "description": "图表标题，默认自动生成"
+                        "description": "图表标题，必须使用英文；如果不确定请留空，由系统自动生成英文标题"
                     }
                 },
                 "required": ["chart_type"]
@@ -489,6 +489,7 @@ def _build_system_prompt(df):
 - 必须实际调用工具来推进分析，**不要只给文字建议**
 - 每次回复至少调用一个工具
 - **主动画图** — 数据探索阶段至少生成 1-2 张图表（分布直方图、相关性热力图、散点图等）
+- **图表标题必须使用英文** — matplotlib 环境可能缺少中文字体，调用 `generate_chart` 时 title 使用英文或留空
 - 分析完一个方向后，考虑是否需要从另一个角度继续
 - 模型训练完成后，解释指标的含义（R² 越接近 1 越好，MAE/RMSE 越小越好等）
 - 用中文回复，输出清晰有层次的 Markdown 分析报告"""
@@ -508,11 +509,72 @@ def _fig_to_base64(fig):
     import io
     import base64
     import matplotlib.pyplot as _plt
+    _sanitize_matplotlib_text(fig)
     buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    fig.savefig(buf, format='png', dpi=90, bbox_inches='tight')
     _plt.close(fig)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode('utf-8')
+
+
+_AGENT_CHART_FIGSIZE = (5.8, 3.4)
+_AGENT_SQUARE_FIGSIZE = (4.4, 4.4)
+_AGENT_MAX_FIG_WIDTH = 6.2
+_AGENT_MAX_FIG_HEIGHT = 4.8
+
+
+def _ascii_chart_label(value, fallback):
+    """Return an ASCII-only label for chart titles/captions."""
+    text = str(value or "").strip()
+    if text and text.isascii():
+        return text[:60]
+    return fallback
+
+
+def _axis_label(value, fallback):
+    """Return an ASCII-only axis/legend label."""
+    return _ascii_chart_label(value, fallback)
+
+
+def _category_labels(values, prefix="Category", limit=None):
+    """Return ASCII-only category labels while preserving readable ASCII values."""
+    labels = []
+    for i, value in enumerate(list(values)[:limit] if limit else values):
+        labels.append(_ascii_chart_label(value, f"{prefix} {i + 1}"))
+    return labels
+
+
+def _chart_title(proposed, fallback):
+    """Use only English/ASCII chart titles to avoid missing CJK fonts."""
+    return _ascii_chart_label(proposed, fallback)
+
+
+def _bounded_figsize(width, height):
+    return (min(width, _AGENT_MAX_FIG_WIDTH), min(height, _AGENT_MAX_FIG_HEIGHT))
+
+
+def _sanitize_matplotlib_text(fig):
+    """Replace non-ASCII chart text with English placeholders before export."""
+    for ax_index, ax in enumerate(fig.get_axes(), start=1):
+        if not ax.get_title().isascii():
+            ax.set_title(f"Chart {ax_index}")
+        if ax.get_xlabel() and not ax.get_xlabel().isascii():
+            ax.set_xlabel(f"X Axis {ax_index}")
+        if ax.get_ylabel() and not ax.get_ylabel().isascii():
+            ax.set_ylabel(f"Y Axis {ax_index}")
+        for i, tick in enumerate(ax.get_xticklabels(), start=1):
+            if tick.get_text() and not tick.get_text().isascii():
+                tick.set_text(f"Item {i}")
+        for i, tick in enumerate(ax.get_yticklabels(), start=1):
+            if tick.get_text() and not tick.get_text().isascii():
+                tick.set_text(f"Item {i}")
+        legend = ax.get_legend()
+        if legend:
+            if legend.get_title().get_text() and not legend.get_title().get_text().isascii():
+                legend.get_title().set_text("Group")
+            for i, text in enumerate(legend.get_texts(), start=1):
+                if text.get_text() and not text.get_text().isascii():
+                    text.set_text(f"Group {i}")
 
 
 def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
@@ -531,29 +593,33 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="散点图需要同时指定 x_column 和 y_column。")
             if x_column not in df.columns or y_column not in df.columns:
                 return _make_result(text=f"列不存在。可用列: {', '.join(str(c) for c in df.columns)}")
-            fig, ax = plt.subplots(figsize=(8, 5))
+            chart_title = _chart_title(
+                title,
+                f"Scatter Plot: {_ascii_chart_label(y_column, 'Y')} vs {_ascii_chart_label(x_column, 'X')}",
+            )
+            fig, ax = plt.subplots(figsize=_AGENT_CHART_FIGSIZE)
             if color_column and color_column in df.columns:
                 unique_vals = df[color_column].dropna().unique()
                 if len(unique_vals) > 20:
                     top_vals = df[color_column].value_counts().head(20).index
-                    for label in top_vals:
+                    for label, display_label in zip(top_vals, _category_labels(top_vals, "Group")):
                         mask = df[color_column] == label
-                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=str(label), s=20)
-                    ax.legend(fontsize=7, title=f"{color_column} (top 20)")
+                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=display_label, s=20)
+                    ax.legend(fontsize=7, title=f"{_axis_label(color_column, 'Group')} (top 20)")
                 else:
-                    for label in unique_vals:
+                    for label, display_label in zip(unique_vals, _category_labels(unique_vals, "Group")):
                         mask = df[color_column] == label
-                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=str(label), s=20)
-                    ax.legend(fontsize=8, title=color_column)
+                        ax.scatter(df.loc[mask, x_column], df.loc[mask, y_column], alpha=0.6, label=display_label, s=20)
+                    ax.legend(fontsize=8, title=_axis_label(color_column, "Group"))
             else:
                 ax.scatter(df[x_column], df[y_column], alpha=0.6, s=20)
-            ax.set_xlabel(x_column); ax.set_ylabel(y_column)
-            ax.set_title(title or f"{y_column} vs {x_column}")
+            ax.set_xlabel(_axis_label(x_column, "X Axis")); ax.set_ylabel(_axis_label(y_column, "Y Axis"))
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成散点图：**{y_column}** vs **{x_column}**" + (f"，按 {color_column} 着色" if color_column else ""),
-                images=[{"base64": b64, "title": title or f"{y_column} vs {x_column}", "alt": "scatter plot"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "scatter plot"}]
             )
 
         elif chart_type == "line":
@@ -561,16 +627,20 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="折线图需要同时指定 x_column 和 y_column。")
             if x_column not in df.columns or y_column not in df.columns:
                 return _make_result(text=f"列不存在。可用列: {', '.join(str(c) for c in df.columns)}")
-            fig, ax = plt.subplots(figsize=(8, 5))
+            chart_title = _chart_title(
+                title,
+                f"Line Chart: {_ascii_chart_label(y_column, 'Y')} by {_ascii_chart_label(x_column, 'X')}",
+            )
+            fig, ax = plt.subplots(figsize=_AGENT_CHART_FIGSIZE)
             data = df[[x_column, y_column]].dropna().sort_values(x_column)
             ax.plot(data[x_column], data[y_column], linewidth=1.5)
-            ax.set_xlabel(x_column); ax.set_ylabel(y_column)
-            ax.set_title(title or f"{y_column} vs {x_column}")
+            ax.set_xlabel(_axis_label(x_column, "X Axis")); ax.set_ylabel(_axis_label(y_column, "Y Axis"))
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成折线图：**{y_column}** vs **{x_column}**",
-                images=[{"base64": b64, "title": title or f"{y_column} vs {x_column}", "alt": "line chart"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "line chart"}]
             )
 
         elif chart_type == "bar":
@@ -578,26 +648,30 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="柱状图需要指定 x_column。")
             if x_column not in df.columns:
                 return _make_result(text=f"列 '{x_column}' 不存在。")
-            fig, ax = plt.subplots(figsize=(8, 5))
+            chart_title = _chart_title(
+                title,
+                f"Bar Chart: {_ascii_chart_label(x_column, 'Category')}",
+            )
+            fig, ax = plt.subplots(figsize=_AGENT_CHART_FIGSIZE)
             if y_column and y_column in df.columns and pd.api.types.is_numeric_dtype(df[y_column]):
                 # Group by x, aggregate y
                 grouped = df.groupby(x_column)[y_column].mean().sort_values(ascending=False).head(30)
                 ax.bar(range(len(grouped)), grouped.values)
                 ax.set_xticks(range(len(grouped)))
-                ax.set_xticklabels(grouped.index, rotation=45, ha='right', fontsize=8)
-                ax.set_ylabel(f"avg({y_column})")
+                ax.set_xticklabels(_category_labels(grouped.index, "Category"), rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel(f"avg({_axis_label(y_column, 'Value')})")
             else:
                 vc = df[x_column].value_counts().head(30)
                 ax.bar(range(len(vc)), vc.values)
                 ax.set_xticks(range(len(vc)))
-                ax.set_xticklabels(vc.index, rotation=45, ha='right', fontsize=8)
+                ax.set_xticklabels(_category_labels(vc.index, "Category"), rotation=45, ha='right', fontsize=8)
                 ax.set_ylabel("Count")
-            ax.set_title(title or f"Bar chart of {x_column}")
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成柱状图：**{x_column}**",
-                images=[{"base64": b64, "title": title or f"Bar chart of {x_column}", "alt": "bar chart"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "bar chart"}]
             )
 
         elif chart_type == "histogram":
@@ -608,15 +682,19 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
             s = df[x_column].dropna()
             if not pd.api.types.is_numeric_dtype(s):
                 return _make_result(text=f"'{x_column}' 不是数值列，无法绘制直方图。")
-            fig, ax = plt.subplots(figsize=(8, 5))
+            chart_title = _chart_title(
+                title,
+                f"Distribution: {_ascii_chart_label(x_column, 'Feature')}",
+            )
+            fig, ax = plt.subplots(figsize=_AGENT_CHART_FIGSIZE)
             ax.hist(s, bins=30, alpha=0.7, edgecolor='white')
-            ax.set_xlabel(x_column); ax.set_ylabel("Frequency")
-            ax.set_title(title or f"Distribution of {x_column}")
+            ax.set_xlabel(_axis_label(x_column, "Feature")); ax.set_ylabel("Frequency")
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成直方图：**{x_column}** 分布（均值={s.mean():.2f}, 中位数={s.median():.2f}）",
-                images=[{"base64": b64, "title": title or f"Distribution of {x_column}", "alt": "histogram"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "histogram"}]
             )
 
         elif chart_type == "box":
@@ -624,27 +702,35 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="箱线图需要指定 x_column。")
             if x_column not in df.columns:
                 return _make_result(text=f"列 '{x_column}' 不存在。")
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig, ax = plt.subplots(figsize=_AGENT_CHART_FIGSIZE)
             if y_column and y_column in df.columns and pd.api.types.is_numeric_dtype(df[y_column]):
+                chart_title = _chart_title(
+                    title,
+                    f"Box Plot: {_ascii_chart_label(y_column, 'Value')} by {_ascii_chart_label(x_column, 'Group')}",
+                )
                 # Box plot grouped by x
                 groups = [df[df[x_column] == val][y_column].dropna().values for val in df[x_column].dropna().unique()[:20]]
-                labels = [str(val) for val in df[x_column].dropna().unique()[:20]]
+                labels = _category_labels(df[x_column].dropna().unique()[:20], "Group")
                 ax.boxplot(groups, labels=labels)
                 ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
-                ax.set_ylabel(y_column)
-                ax.set_title(title or f"Box plot of {y_column} by {x_column}")
+                ax.set_ylabel(_axis_label(y_column, "Value"))
+                ax.set_title(chart_title, fontsize=10)
             else:
+                chart_title = _chart_title(
+                    title,
+                    f"Box Plot: {_ascii_chart_label(x_column, 'Feature')}",
+                )
                 s = df[x_column].dropna()
                 if not pd.api.types.is_numeric_dtype(s):
                     return _make_result(text=f"'{x_column}' 不是数值列，无法绘制箱线图。")
-                ax.boxplot([s.values], labels=[x_column])
-                ax.set_ylabel(x_column)
-                ax.set_title(title or f"Box plot of {x_column}")
+                ax.boxplot([s.values], labels=[_axis_label(x_column, "Feature")])
+                ax.set_ylabel(_axis_label(x_column, "Feature"))
+                ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成箱线图：**{x_column}**",
-                images=[{"base64": b64, "title": title or f"Box plot of {x_column}", "alt": "box plot"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "box plot"}]
             )
 
         elif chart_type == "heatmap":
@@ -652,18 +738,19 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="需要至少 2 个数值列才能绘制热力图。")
             cols = numeric_cols[:20]
             corr = df[cols].corr()
-            fig, ax = plt.subplots(figsize=(max(8, len(cols)*0.5), max(6, len(cols)*0.4)))
+            chart_title = _chart_title(title, "Correlation Heatmap")
+            fig, ax = plt.subplots(figsize=_bounded_figsize(max(5.2, len(cols) * 0.38), max(3.8, len(cols) * 0.32)))
             im = ax.imshow(corr.values, cmap='coolwarm', vmin=-1, vmax=1, aspect='auto')
             ax.set_xticks(range(len(cols))); ax.set_yticks(range(len(cols)))
-            ax.set_xticklabels(cols, rotation=45, ha='right', fontsize=7)
-            ax.set_yticklabels(cols, fontsize=7)
+            ax.set_xticklabels([_axis_label(c, f"Feature {i + 1}") for i, c in enumerate(cols)], rotation=45, ha='right', fontsize=7)
+            ax.set_yticklabels([_axis_label(c, f"Feature {i + 1}") for i, c in enumerate(cols)], fontsize=7)
             plt.colorbar(im, ax=ax, shrink=0.8)
-            ax.set_title(title or "Correlation Heatmap")
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成相关性热力图（{len(cols)} 列）",
-                images=[{"base64": b64, "title": title or "Correlation Heatmap", "alt": "heatmap"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "heatmap"}]
             )
 
         elif chart_type == "pie":
@@ -672,15 +759,19 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
             if x_column not in df.columns:
                 return _make_result(text=f"列 '{x_column}' 不存在。")
             vc = df[x_column].value_counts().head(10)
-            fig, ax = plt.subplots(figsize=(7, 7))
-            wedges, texts, autotexts = ax.pie(vc.values, labels=vc.index, autopct='%1.1f%%',
+            chart_title = _chart_title(
+                title,
+                f"Pie Chart: {_ascii_chart_label(x_column, 'Category')}",
+            )
+            fig, ax = plt.subplots(figsize=_AGENT_SQUARE_FIGSIZE)
+            wedges, texts, autotexts = ax.pie(vc.values, labels=_category_labels(vc.index, "Category"), autopct='%1.1f%%',
                                                textprops={'fontsize': 8})
-            ax.set_title(title or f"Pie chart of {x_column}")
+            ax.set_title(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成饼图：**{x_column}**（共 {len(vc)} 个类别）",
-                images=[{"base64": b64, "title": title or f"Pie chart of {x_column}", "alt": "pie chart"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "pie chart"}]
             )
 
         elif chart_type == "pairplot":
@@ -700,29 +791,30 @@ def _generate_chart(chart_type, x_column, y_column, color_column, title, df):
                 return _make_result(text="需要至少 2 个数值列才能绘制成对关系图。")
 
             n = len(select_cols)
-            fig, axes = plt.subplots(n, n, figsize=(n*2.5, n*2.2))
+            chart_title = _chart_title(title, "Pair Plot")
+            fig, axes = plt.subplots(n, n, figsize=_bounded_figsize(n * 1.65, n * 1.45))
             for i in range(n):
                 for j in range(n):
                     ax = axes[i][j] if n > 1 else axes
                     if i == j:
                         ax.hist(df[select_cols[i]].dropna(), bins=20, alpha=0.7)
-                        ax.set_title(select_cols[i], fontsize=7)
+                        ax.set_title(_ascii_chart_label(select_cols[i], f"Feature {i + 1}"), fontsize=7)
                     else:
                         ax.scatter(df[select_cols[j]], df[select_cols[i]], alpha=0.5, s=4)
                     if j == 0:
-                        ax.set_ylabel(select_cols[i], fontsize=7)
+                        ax.set_ylabel(_axis_label(select_cols[i], f"Feature {i + 1}"), fontsize=7)
                     else:
                         ax.set_yticklabels([])
                     if i == n - 1:
-                        ax.set_xlabel(select_cols[j], fontsize=7)
+                        ax.set_xlabel(_axis_label(select_cols[j], f"Feature {j + 1}"), fontsize=7)
                     else:
                         ax.set_xticklabels([])
-            plt.suptitle(title or "Pair Plot", fontsize=10)
+            plt.suptitle(chart_title, fontsize=10)
             plt.tight_layout()
             b64 = _fig_to_base64(fig)
             return _make_result(
                 text=f"已生成配对关系图（{len(select_cols)} 列：{', '.join(select_cols)}）",
-                images=[{"base64": b64, "title": title or "Pair Plot", "alt": "pair plot"}]
+                images=[{"base64": b64, "title": chart_title, "alt": "pair plot"}]
             )
 
         return _make_result(text=f"未知图表类型: {chart_type}")
@@ -791,6 +883,32 @@ _captured_figures = []
 _figure_warnings = []
 _MAX_CAPTURED_FIGURES = 5
 _MAX_FIGURE_B64_CHARS = 8 * 1024 * 1024
+_MAX_FIGURE_WIDTH = 6.2
+_MAX_FIGURE_HEIGHT = 4.8
+
+def _ascii_text(value, fallback):
+    text = str(value or "").strip()
+    return text if text and text.isascii() else fallback
+
+def _sanitize_matplotlib_text(fig):
+    for ax_index, ax in enumerate(fig.get_axes(), start=1):
+        ax.set_title(_ascii_text(ax.get_title(), f"Chart {ax_index}"))
+        if ax.get_xlabel():
+            ax.set_xlabel(_ascii_text(ax.get_xlabel(), f"X Axis {ax_index}"))
+        if ax.get_ylabel():
+            ax.set_ylabel(_ascii_text(ax.get_ylabel(), f"Y Axis {ax_index}"))
+        for i, tick in enumerate(ax.get_xticklabels(), start=1):
+            if tick.get_text() and not tick.get_text().isascii():
+                tick.set_text(f"Item {i}")
+        for i, tick in enumerate(ax.get_yticklabels(), start=1):
+            if tick.get_text() and not tick.get_text().isascii():
+                tick.set_text(f"Item {i}")
+        legend = ax.get_legend()
+        if legend:
+            if legend.get_title().get_text():
+                legend.get_title().set_text(_ascii_text(legend.get_title().get_text(), "Group"))
+            for i, text in enumerate(legend.get_texts(), start=1):
+                text.set_text(_ascii_text(text.get_text(), f"Group {i}"))
 
 def _capture_figure(fig=None):
     fig = fig or plt.gcf()
@@ -799,8 +917,13 @@ def _capture_figure(fig=None):
             _figure_warnings.append(f"已达到图片数量上限 {_MAX_CAPTURED_FIGURES} 张，后续图片已跳过。")
             plt.close(fig)
             return
+        width, height = fig.get_size_inches()
+        if width > _MAX_FIGURE_WIDTH or height > _MAX_FIGURE_HEIGHT:
+            scale = min(_MAX_FIGURE_WIDTH / max(width, 0.1), _MAX_FIGURE_HEIGHT / max(height, 0.1))
+            fig.set_size_inches(max(3.6, width * scale), max(2.4, height * scale), forward=True)
+        _sanitize_matplotlib_text(fig)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=90, bbox_inches="tight")
         buf.seek(0)
         encoded = base64.b64encode(buf.read()).decode("utf-8")
         if len(encoded) > _MAX_FIGURE_B64_CHARS:
@@ -961,7 +1084,8 @@ def _execute_code_in_subprocess(code, df, timeout=30):
             if not isinstance(fig, str) or len(fig) > _MAX_CODE_INTERPRETER_IMAGE_B64_CHARS:
                 figure_warnings.append("有一张图片过大或格式异常，已跳过。")
                 continue
-            images.append({"base64": fig, "title": "Code Output", "alt": f"Figure {len(images)+1}"})
+            image_index = len(images) + 1
+            images.append({"base64": fig, "title": f"Code Chart {image_index}", "alt": f"Figure {image_index}"})
 
         text_parts = []
         if sampled:

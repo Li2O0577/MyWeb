@@ -1,6 +1,6 @@
 """Decision tree training & prediction API routes."""
 from flask import Blueprint, request, jsonify
-from routes._helpers import coerce_column_like, coerce_columns_like
+from routes._helpers import coerce_column_like, coerce_columns_like, prediction_exception_message
 from routes._responses import missing_field, session_expired, service_error
 from routes._versioning import setup_version_routes
 from services.decision_tree_service import train, predict_one
@@ -54,8 +54,11 @@ def predict():
     data = request.json or {}
     if "input_dict" not in data or "task_type" not in data:
         return missing_field("input_dict or task_type")
-    result, err = predict_one(data["input_dict"], data["task_type"],
-                              version_id=data.get("version_id"))
+    try:
+        result, err = predict_one(data["input_dict"], data["task_type"],
+                                  version_id=data.get("version_id"))
+    except Exception:
+        return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:
         if isinstance(err, tuple):
             code, msg = err

@@ -300,6 +300,52 @@ def render_stable_prediction_panel(
     render_probability_table(probability_rows(probabilities, probability_labels))
 
 
+def prepare_batch_prediction(file_obj, required_features, context="批量预测", max_rows=10000):
+    """Read and validate a batch prediction CSV before calling backend."""
+    if file_obj is None:
+        return None, None, None
+
+    try:
+        batch_df = pd.read_csv(file_obj)
+    except Exception:
+        return None, None, f"⚠️ {context}: CSV 文件读取失败，请确认文件编码、分隔符和内容格式。"
+
+    if batch_df.empty:
+        return batch_df, None, f"⚠️ {context}: CSV 文件为空，请上传至少 1 行数据。"
+    if len(batch_df) > max_rows:
+        return (
+            batch_df,
+            None,
+            f"⚠️ {context}: 单次最多支持 {max_rows} 行，当前为 {len(batch_df)} 行。请拆分文件后重试。",
+        )
+
+    duplicated = batch_df.columns[batch_df.columns.duplicated()].tolist()
+    if duplicated:
+        names = "、".join(str(c) for c in duplicated[:8])
+        return batch_df, None, f"⚠️ {context}: CSV 包含重复列名：{names}。请先重命名后再预测。"
+
+    required = [str(c) for c in required_features]
+    batch_df.columns = [str(c) for c in batch_df.columns]
+    missing_cols = [c for c in required if c not in batch_df.columns]
+    if missing_cols:
+        names = "、".join(missing_cols[:12])
+        return batch_df, None, f"⚠️ {context}: 缺少模型需要的特征列：{names}。"
+
+    batch_x = batch_df[required].values
+    err = validate_input_array(batch_x, context, expected_features=len(required))
+    if err:
+        return batch_df, None, err
+    return batch_df, batch_x, None
+
+
+def render_batch_prediction_output(result_df, filename="predictions.csv"):
+    """Render a stable batch prediction table and download action."""
+    st.caption(f"批量预测完成：{len(result_df)} 行")
+    st.dataframe(result_df, use_container_width=True)
+    csv = result_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button("📥 下载预测结果", csv, filename, "text/csv", use_container_width=True)
+
+
 def cluster_explanation(cluster_label, cluster_result=None):
     """Return a short explanation for a predicted cluster."""
     if cluster_result:
@@ -342,7 +388,7 @@ def plot_loss_curve(train_losses, val_losses, y_label="损失值", title="训练
 
 # ── Model version selector ──
 
-def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
+def render_version_selector(model_label, list_fn, activate_fn, delete_fn, prediction_keys=None):
     """Render a model version selector UI.
 
     Returns the active version_id (str or None). Call after training or on page load.
@@ -360,21 +406,25 @@ def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
         st.caption("暂无已保存的模型版本。")
         return None
 
+    prediction_keys = prediction_keys or []
     with st.expander(f"📦 {model_label} 模型版本管理（共 {len(versions)} 个版本）", expanded=False):
         # Build version options
         options = []
         vid_to_idx = {}
+        vid_to_meta = {}
         for i, v in enumerate(versions):
             vid = v.get("version_id", "")
             ds = v.get("dataset_name", "未知数据集")
             created = v.get("created_at", "")[:16].replace("T", " ")
+            target = v.get("target", "")
             metrics = v.get("metrics", {})
             metric_str = ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
-                                   for k, v in metrics.items())
+                                   for k, v in metrics.items()) or "暂无指标"
             active_mark = " ★" if vid == active else ""
-            label = f"{ds} | {metric_str} | {created}{active_mark}"
+            label = f"{ds} | {target or '无目标列'} | {metric_str} | {created}{active_mark}"
             options.append(label)
             vid_to_idx[label] = vid
+            vid_to_meta[vid] = v
 
         col1, col2, col3 = st.columns([5, 1, 1])
         with col1:
@@ -391,18 +441,56 @@ def render_version_selector(model_label, list_fn, activate_fn, delete_fn):
             )
             selected_vid = vid_to_idx.get(selected_label)
 
+        selected_meta = vid_to_meta.get(selected_vid, {}) if selected_vid else {}
+        selected_metrics = selected_meta.get("metrics", {}) or {}
+        metric_text = "、".join(
+            f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+            for k, v in selected_metrics.items()
+        ) or "暂无指标"
+        selected_params = selected_meta.get("params", {}) or {}
+        task_hint = selected_params.get("task_type") or selected_params.get("task") or selected_params.get("algorithm") or "默认"
+        recommendation = "当前激活版本" if selected_vid == active else "可切换版本"
+        if versions and selected_vid == versions[0].get("version_id"):
+            recommendation += " / 最新版本"
+        render_kv_panel(
+            "选中版本详情",
+            [
+                ("推荐状态", recommendation),
+                ("数据集", selected_meta.get("dataset_name", "未知数据集")),
+                ("目标/任务", selected_meta.get("target") or task_hint),
+                ("指标", metric_text),
+                ("创建时间", (selected_meta.get("created_at", "") or "")[:16].replace("T", " ") or "未知"),
+            ],
+            "切换版本后会清空当前页面的旧预测结果，避免版本和结果不一致。",
+            tone="model",
+        )
+
         with col2:
             if st.button("✅ 激活", key=f"activate_{model_label}", use_container_width=True):
                 if selected_vid and selected_vid != active:
                     activate_fn(selected_vid)
+                    for key in prediction_keys:
+                        st.session_state.pop(key, None)
                     st.toast(f"已激活版本 {selected_vid[:20]}...", icon="✅")
                     st.rerun()
+                else:
+                    st.toast("该版本已经是当前激活版本。", icon="ℹ️")
 
         with col3:
             if selected_vid and len(versions) > 1:
+                confirm_delete = st.checkbox(
+                    "确认删除",
+                    key=f"confirm_delete_{model_label}_{selected_vid}",
+                    help="删除后会移除该版本记录和文件。",
+                )
                 if st.button("🗑️ 删除", key=f"delete_{model_label}", use_container_width=True):
-                    delete_fn(selected_vid)
-                    st.warning(f"已删除版本 {selected_vid[:20]}...")
-                    st.rerun()
+                    if not confirm_delete:
+                        st.toast("请先勾选“确认删除”。", icon="⚠️")
+                    else:
+                        delete_fn(selected_vid)
+                        for key in prediction_keys:
+                            st.session_state.pop(key, None)
+                        st.warning(f"已删除版本 {selected_vid[:20]}...")
+                        st.rerun()
 
     return active

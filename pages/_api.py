@@ -16,6 +16,10 @@ ERROR_CODE_TITLES = {
     "SESSION_EXPIRED": "当前数据已过期",
     "MODEL_NOT_FOUND": "还没有可用模型",
     "VERSION_NOT_FOUND": "模型版本不存在",
+    "NO_FILE": "没有收到文件",
+    "FILE_TOO_LARGE": "文件太大",
+    "UPLOAD_FAILED": "文件解析失败",
+    "SYNC_FAILED": "当前数据同步失败",
     "MISSING_FIELD": "请求参数不完整",
     "TRAINING_FAILED": "训练没有完成",
     "PREDICTION_FAILED": "预测没有完成",
@@ -29,6 +33,10 @@ ERROR_CODE_HINTS = {
     "SESSION_EXPIRED": "请重新上传数据，或点击页面中的“重新同步当前数据到后端”。",
     "MODEL_NOT_FOUND": "请先训练模型，或在模型版本列表中切换到一个有效版本。",
     "VERSION_NOT_FOUND": "该版本可能已被删除，请刷新版本列表后再试。",
+    "NO_FILE": "请重新选择 CSV 或 Excel 文件后再上传。",
+    "FILE_TOO_LARGE": "请压缩、拆分文件，或减少数据量后再上传。",
+    "UPLOAD_FAILED": "请确认文件格式为 CSV/Excel，且内容没有损坏。",
+    "SYNC_FAILED": "请确认当前数据可以导出为 CSV，且列名和内容没有异常。",
     "MISSING_FIELD": "请刷新页面后重试；如果仍然出现，说明前后端参数可能不一致。",
     "TRAINING_FAILED": "请检查训练参数和数据质量后再试。",
     "PREDICTION_FAILED": "请检查输入特征数量、顺序和数值类型。",
@@ -115,12 +123,32 @@ def session_is_valid():
     sid = st.session_state.get("session_id")
     if not sid:
         return False
-    resp = _get(f"/data/{sid}/summary")
-    if resp and "summary" in resp:
-        if resp.get("session_meta"):
-            st.session_state.session_meta = resp["session_meta"]
-        return True
-    st.session_state.pop("session_id", None)
+
+    try:
+        resp = requests.get(f"{API_BASE}/data/{sid}/summary", timeout=(CONNECT_TIMEOUT, 10))
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+            requests.exceptions.RequestException):
+        return False
+
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except Exception:
+            return False
+        if data.get("summary") is not None:
+            if data.get("session_meta"):
+                st.session_state.session_meta = data["session_meta"]
+            return True
+        return False
+
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {}
+    error = payload.get("error") if isinstance(payload, dict) else {}
+    if isinstance(error, dict) and error.get("code") == "SESSION_EXPIRED":
+        st.session_state.pop("session_id", None)
+        st.session_state.pop("session_meta", None)
     return False
 
 
@@ -135,7 +163,11 @@ def render_backend_sync_panel(df, compact=False):
 
     ok, info = _backend_ok()
     if not ok:
-        st.warning("⚠️ 数据已在前端加载，但 Flask 后端未连接。启动后端后点击同步即可训练。")
+        sid = st.session_state.get("session_id")
+        if sid:
+            st.warning(f"⚠️ Flask 后端暂时未连接，前端会保留当前 session `{sid[:12]}...`。后端恢复后可继续校验或重新同步。")
+        else:
+            st.warning("⚠️ 数据已在前端加载，但 Flask 后端未连接。启动后端后点击同步即可训练。")
         return False
 
     sid = st.session_state.get("session_id")

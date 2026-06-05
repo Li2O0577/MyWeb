@@ -44,7 +44,13 @@ if "cluster_algorithm" not in st.session_state:
     st.session_state.cluster_algorithm = "kmeans"
 
 # Version selector
-active_vid = render_version_selector("聚类", list_clustering_versions, activate_clustering_version, delete_clustering_version)
+active_vid = render_version_selector(
+    "聚类",
+    list_clustering_versions,
+    activate_clustering_version,
+    delete_clustering_version,
+    prediction_keys=["cluster_last_prediction"],
+)
 
 # Auto-detect saved model — reloads when active version changes
 status = clustering_status()

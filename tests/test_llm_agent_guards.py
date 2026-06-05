@@ -50,6 +50,33 @@ class LlmAgentGuardTests(unittest.TestCase):
 
         self.assertTrue(ok, err)
 
+    def test_chart_title_falls_back_to_english_when_title_is_chinese(self):
+        title = llm_service._chart_title("销售额趋势", "Line Chart")
+
+        self.assertEqual(title, "Line Chart")
+
+    def test_generate_chart_uses_english_image_title(self):
+        df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [2, 4, 6, 8]})
+
+        result = llm_service._generate_chart("scatter", "x", "y", "", "销售额趋势", df)
+
+        self.assertTrue(result["images"])
+        self.assertTrue(result["images"][0]["title"].isascii())
+        self.assertIn("Scatter Plot", result["images"][0]["title"])
+
+    def test_chart_labels_fall_back_to_english_for_chinese_values(self):
+        labels = llm_service._category_labels(["华东", "华南"], "Group")
+
+        self.assertEqual(labels, ["Group 1", "Group 2"])
+
+    def test_generate_chart_with_chinese_columns_still_uses_english_title(self):
+        df = pd.DataFrame({"价格": [1, 2, 3, 4], "销量": [2, 4, 6, 8], "区域": ["华东", "华南", "华东", "华北"]})
+
+        result = llm_service._generate_chart("scatter", "价格", "销量", "区域", "销售额趋势", df)
+
+        self.assertTrue(result["images"])
+        self.assertEqual(result["images"][0]["title"], "Scatter Plot: Y vs X")
+
 
 if __name__ == "__main__":
     unittest.main()

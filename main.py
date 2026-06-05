@@ -1,5 +1,7 @@
 import html
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -310,6 +312,36 @@ def _latest_model(registry):
     return latest_label, latest
 
 
+def _dependency_profile(backend_ok):
+    def available(module_name):
+        return importlib.util.find_spec(module_name) is not None
+
+    torch_ok = available("torch")
+    cuda_text = "不可用"
+    if torch_ok:
+        try:
+            import torch
+            cuda_text = "可用" if torch.cuda.is_available() else "不可用"
+        except Exception:
+            cuda_text = "检测失败"
+
+    required = {
+        "pandas": available("pandas"),
+        "sklearn": available("sklearn"),
+        "plotly": available("plotly"),
+        "streamlit": available("streamlit"),
+        "requests": available("requests"),
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    return [
+        ("Python", sys.version.split()[0]),
+        ("PyTorch", "已安装" if torch_ok else "未安装"),
+        ("CUDA", cuda_text),
+        ("Flask 后端", "已连接" if backend_ok else "未连接"),
+        ("关键库", "完整" if not missing else "缺少：" + "、".join(missing)),
+    ]
+
+
 def _status_cards(data, backend_ok, model_total, active_models):
     sync_label = "已同步" if st.session_state.get("session_id") and backend_ok else "待同步"
     if not data["has_data"]:
@@ -440,6 +472,19 @@ def _render_info_panels(data, backend_ok, model_total, active_models, latest_lab
         )
         if st.button("管理模型版本", use_container_width=True):
             st.switch_page("pages/4_regression.py")
+
+    st.markdown('<div class="home-section-title">运行环境</div>', unsafe_allow_html=True)
+    st.markdown('<div class="home-section-desc">训练和预测依赖这些本地环境状态；缺失项应在训练前处理。</div>', unsafe_allow_html=True)
+    dep_cols = st.columns(5, gap="small")
+    for col, (label, value) in zip(dep_cols, _dependency_profile(backend_ok)):
+        with col:
+            st.markdown(
+                '<div class="home-step">'
+                f'<div class="home-step-title">{_e(label)}</div>'
+                f'<div class="home-step-desc">{_e(value)}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def _render_workflow():

@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import json
 import base64
+import requests
 from pages._prepare import render_sidebar, data_uploader
 from pages._api import chat_llm, agent_chat_llm, get_summary, backend_status_badge, render_backend_sync_panel
 from pages._ui_common import render_notice, render_page_header, render_section_header, render_status_strip
@@ -33,7 +34,7 @@ st.markdown("""<style>
 .stChatMessage [data-testid="stCaptionContainer"] { margin-bottom: 0.3rem !important; }
 [data-testid="stExpander"] .stExpander { gap: 0.2rem; }
 .stImage { display: block !important; }
-.stImage img { display: block !important; width: 100% !important; }
+.stImage img { display: block !important; max-width: min(100%, 680px) !important; height: auto !important; }
 </style>""", unsafe_allow_html=True)
 render_sidebar("pages/9_llm_analysis.py")
 render_page_header("大模型分析", "使用 Smart、Direct 或 Agent 模式完成数据问答、图表生成和自动分析。")
@@ -97,7 +98,7 @@ def _render_image(img_event):
             return
         buf = _io.BytesIO(raw)
         buf.seek(0)
-        st.image(buf, caption=img_event.get("title", ""), use_container_width=True)
+        st.image(buf, caption=img_event.get("title", ""), width=640)
     except Exception:
         st.toast("图片解码失败，已跳过。", icon="⚠️")
 
@@ -135,6 +136,28 @@ def _format_llm_error(err):
     if err:
         return str(err)
     return "请求没有完成，请稍后重试。"
+
+
+def _format_response_error(response, fallback):
+    """Return a friendly message from an error HTTP response."""
+    try:
+        payload = response.json()
+    except Exception:
+        return fallback
+    if isinstance(payload, dict) and "error" in payload:
+        return _format_llm_error(payload["error"])
+    return fallback
+
+
+def _format_request_exception(exc, context="大模型请求"):
+    """Map request exceptions to user-facing Chinese messages."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return f"{context}连接失败，请检查 Flask 后端、API Base 或网络状态。"
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"{context}超时，请缩小问题范围、减少上下文，或稍后重试。"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return f"{context}没有完成，请检查 API 配置或网络状态。"
+    return f"{context}出现异常，请稍后重试。"
 
 
 def _iter_sse_events(response):
@@ -300,8 +323,8 @@ elif st.session_state.get("chat_mode") != mode:
 # Agent mode: require backend session
 if is_agent:
     sid = st.session_state.get("session_id")
-    if not sid:
-        st.warning("⚠️ Agent 模式需要后端 session。请先在「📊 数据加载」页面上传数据到后端，或点击上方的「重新同步当前数据到后端」按钮。")
+    if not sid or not backend_synced:
+        st.warning("⚠️ Agent 模式需要有效的后端 session。请先同步当前数据到后端，或确认 Flask 后端已启动。")
         st.stop()
 
 # ── API config ──
@@ -429,7 +452,13 @@ if user_input:
                         _rollback_user_message()
                         status_placeholder.empty()
                         tool_placeholder.empty()
-                        st.toast(f"大模型分析请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
+                        st.toast(
+                            _format_response_error(
+                                resp,
+                                f"大模型分析请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。",
+                            ),
+                            icon="❌",
+                        )
                         st.stop()
 
                     for event in _iter_sse_events(resp):
@@ -488,11 +517,11 @@ if user_input:
                     if full_reply or images or tool_events:
                         status_placeholder.empty()
                         tool_placeholder.empty()
-                        st.toast(f"Agent 连接中断（已保存部分结果）: {e}", icon="⚠️")
+                        st.toast(_format_request_exception(e, "Agent 连接") + " 已保存部分结果。", icon="⚠️")
                         _finalize_agent_response(full_reply, images, tool_events)
                     else:
                         _rollback_user_message()
-                        st.toast(f"Agent 错误: {e}", icon="❌")
+                        st.toast(_format_request_exception(e, "Agent 请求"), icon="❌")
 
         else:
             # ── Smart / Direct Mode ──
@@ -533,7 +562,13 @@ if user_input:
                     resp = chat_llm(api_base, api_key, model, api_messages)
                     if resp.status_code != 200:
                         _rollback_user_message(data_was_attached)
-                        st.toast(f"大模型请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。", icon="❌")
+                        st.toast(
+                            _format_response_error(
+                                resp,
+                                f"大模型请求失败（HTTP {resp.status_code}），请检查 API 配置或稍后重试。",
+                            ),
+                            icon="❌",
+                        )
                         st.stop()
 
                     for event in _iter_sse_events(resp):
@@ -559,11 +594,11 @@ if user_input:
                     if full_reply:
                         text_placeholder.empty()
                         st.session_state.chat_messages.append({"role": "assistant", "content": full_reply, "images": []})
-                        st.toast(f"连接中断（已保存部分结果）: {e}", icon="⚠️")
+                        st.toast(_format_request_exception(e, "大模型连接") + " 已保存部分结果。", icon="⚠️")
                         st.rerun()
                     else:
                         _rollback_user_message(data_was_attached)
-                        st.toast(f"未知错误：{e}", icon="❌")
+                        st.toast(_format_request_exception(e, "大模型请求"), icon="❌")
 
 st.divider()
 with st.expander("📖 使用说明", expanded=False):
