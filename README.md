@@ -30,50 +30,7 @@
 - 前后端通过 HTTP JSON 通信，Flask 无状态（session 数据 TTL 1 小时）
 - ML/LLM/数据处理页面共用统一页头、顶部状态条、区块标题、工作台概况、稳定预测结果面板和风险提示样式，减少页面间体验差异
 
-## 快速开始
-
-### Windows 快速启动
-
-Windows 用户可以直接使用项目自带脚本：
-
-```bat
-setup.bat   # 首次安装依赖
-start.bat   # 启动 Flask 后端和 Streamlit 前端
-```
-
-启动后打开：
-
-```text
-http://localhost:8501
-```
-
-`setup.bat` 会调用 `setup.ps1`，并尝试根据 NVIDIA GPU 安装合适的 PyTorch。脚本只是 Windows 快捷方式；macOS / Linux 请使用下面的通用命令。
-
-### 所有系统通用安装
-
-```bash
-python -m venv .venv
-```
-
-Windows PowerShell：
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-macOS / Linux：
-
-```bash
-source .venv/bin/activate
-```
-
-安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-需要 GPU 训练时，按自己的 CUDA 版本参考 [PyTorch 官方安装命令](https://pytorch.org/get-started/locally/) 重装 PyTorch。
+## 配置
 
 ### 环境要求
 
@@ -103,18 +60,59 @@ pip install -r requirements.txt
 - `backend/requirements.txt` — 仅后端依赖（Flask + PyTorch + sklearn）
 - `setup.ps1` — Windows 可选安装脚本，自动检测 NVIDIA GPU
 
-### 所有系统通用启动
+### 快速配置
 
-需要打开两个终端，分别启动 Flask 后端和 Streamlit 前端。
+Windows 用户首次配置可以直接运行：
 
-终端 1：启动 Flask 后端
+```bat
+setup.bat
+```
+
+`setup.bat` 会安装前端和后端依赖，并调用 `setup.ps1` 尝试根据 NVIDIA GPU 安装合适的 PyTorch。
+
+### 手动配置
+
+所有系统通用：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+需要 GPU 训练时，根据显卡和 CUDA 版本选择 PyTorch：
+
+| 环境 | PyTorch 安装命令 |
+|------|------------------|
+| CPU / 无 NVIDIA GPU | `python -m pip install torch torchvision torchaudio` |
+| CUDA 11.8 | `python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118` |
+| CUDA 12.1 | `python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121` |
+| CUDA 12.8 | `python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128` |
+
+不确定 CUDA 版本时，以 [PyTorch 官方安装页面](https://pytorch.org/get-started/locally/) 为准。
+
+## 启动
+
+### 快速启动
+
+Windows 用户可以直接运行：
+
+```bat
+start.bat
+```
+
+脚本会启动 Flask 后端和 Streamlit 前端两个窗口。停止项目时关闭这两个窗口。
+
+### 手动启动
+
+手动启动需要两个终端。
+
+终端 1：启动后端
 
 ```bash
 cd backend
 python app.py
 ```
 
-终端 2：启动 Streamlit 前端
+终端 2：启动前端
 
 Windows PowerShell：
 
@@ -137,6 +135,8 @@ set INDETERMINATE_API_BASE=http://127.0.0.1:5001/api
 streamlit run main.py
 ```
 
+如果从 `backend` 目录启动过后端，前端终端需要回到项目根目录再运行 `streamlit run main.py`。
+
 默认地址：
 
 ```text
@@ -144,16 +144,18 @@ Flask 后端: http://localhost:5001
 Streamlit 前端: http://localhost:8501
 ```
 
-### 使用
+### 使用流程
 
 1. 打开 `http://localhost:8501`
-2. 在首页查看运行环境状态
+2. 在首页确认 Flask 后端已连接
 3. 在「数据加载」页面上传 CSV/Excel
 4. 在「数据可视化」页面探索数据
 5. 在 ML 页面训练模型并预测
 6. 在「大模型分析」页面使用 Smart / Direct / Agent 模式
 
-### 清理缓存
+## 清理
+
+### 快速清理
 
 Windows：
 
@@ -161,14 +163,25 @@ Windows：
 clean.bat
 ```
 
+### 手动清理
+
+Windows PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File clean.ps1 -WhatIf
+powershell -ExecutionPolicy Bypass -File clean.ps1 -Force
+```
+
 macOS / Linux：
 
 ```bash
-find . -type d -name "__pycache__" -prune -exec rm -rf {} +
-find backend/sessions -type f \( -name "*.parquet" -o -name "*.meta.json" \) -delete
+find . -path "./.venv" -prune -o -type d -name "__pycache__" -exec rm -rf {} +
+rm -f backend/sessions/*.parquet backend/sessions/*.meta.json
 ```
 
-### 运行测试
+清理命令只用于缓存和 session。模型版本在 `backend/models/` 下，确认不需要后再手动删除。
+
+## 测试
 
 ```bash
 python -m unittest discover -s tests
