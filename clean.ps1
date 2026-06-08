@@ -261,11 +261,10 @@ if ($failed -gt 0) {
 }
 Write-Host ""
 
-Write-Host "  Kept (registry + config):" -ForegroundColor DarkGray
+Write-Host "  Kept (registry + code):" -ForegroundColor DarkGray
 Write-Host "    backend/models/.gitkeep" -ForegroundColor DarkGray
 Write-Host "    backend/models/registry.json" -ForegroundColor DarkGray
 Write-Host "    backend/models/registry.py" -ForegroundColor DarkGray
-Write-Host "    backend/models/reg_config.json" -ForegroundColor DarkGray
 Write-Host ""
 
 if (-not $MyInvocation.ExpectingInput) {

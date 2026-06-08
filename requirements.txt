@@ -1,8 +1,9 @@
-streamlit>=1.35
-pandas>=2.0
-numpy>=1.24
-plotly>=5.17
-scikit-learn>=1.3
-requests>=2.31
-openpyxl>=3.0
-matplotlib>=3.7
+# Full project dependencies: Streamlit frontend + Flask backend.
+# For manual full installation:
+#   pip install -r requirements.txt
+#
+# For GPU training, reinstall PyTorch with the CUDA wheel that matches
+# your machine: https://pytorch.org/get-started/locally/
+
+-r requirements-frontend.txt
+-r backend/requirements.txt

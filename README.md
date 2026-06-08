@@ -32,15 +32,48 @@
 
 ## 快速开始
 
-### 1. 一键安装
+### Windows 快速启动
 
-```bash
-# Windows: 双击 setup.bat
-# 或手动:
-powershell -ExecutionPolicy Bypass -File setup.ps1
+Windows 用户可以直接使用项目自带脚本：
+
+```bat
+setup.bat   # 首次安装依赖
+start.bat   # 启动 Flask 后端和 Streamlit 前端
 ```
 
-脚本自动检测 GPU 并安装对应 PyTorch 版本（CUDA 11.8 / 12.1 / 12.8 / CPU）。
+启动后打开：
+
+```text
+http://localhost:8501
+```
+
+`setup.bat` 会调用 `setup.ps1`，并尝试根据 NVIDIA GPU 安装合适的 PyTorch。脚本只是 Windows 快捷方式；macOS / Linux 请使用下面的通用命令。
+
+### 所有系统通用安装
+
+```bash
+python -m venv .venv
+```
+
+Windows PowerShell：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+macOS / Linux：
+
+```bash
+source .venv/bin/activate
+```
+
+安装依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+需要 GPU 训练时，按自己的 CUDA 版本参考 [PyTorch 官方安装命令](https://pytorch.org/get-started/locally/) 重装 PyTorch。
 
 ### 环境要求
 
@@ -65,37 +98,90 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 ### 依赖文件
 
-- `requirements.txt` — 前端依赖（Streamlit + 可视化）
-- `backend/requirements.txt` — 后端依赖（Flask + PyTorch + sklearn）
-- `setup.ps1` — 一键安装脚本，自动检测 GPU
+- `requirements.txt` — 完整依赖入口（前端 + 后端），适合 `pip install -r requirements.txt`
+- `requirements-frontend.txt` — 仅前端依赖（Streamlit + 可视化）
+- `backend/requirements.txt` — 仅后端依赖（Flask + PyTorch + sklearn）
+- `setup.ps1` — Windows 可选安装脚本，自动检测 NVIDIA GPU
 
-### 2. 一键启动
+### 所有系统通用启动
 
-```bash
-# Windows: 双击 start.bat
-# 或手动:
-powershell -ExecutionPolicy Bypass -File start.ps1
-```
+需要打开两个终端，分别启动 Flask 后端和 Streamlit 前端。
 
-脚本自动检测 Python 解释器（标准 Python / Conda / uv），用户选择后自动在两个终端窗口启动 Flask 后端（:5001）和 Streamlit 前端（:8501）。
-
-### 3. 手动启动
-
-打开两个终端，均需先激活 Python 环境：
+终端 1：启动 Flask 后端
 
 ```bash
-# 终端 1 — 启动 Flask 后端
-conda activate 你的环境          # 或用你自己的环境名
 cd backend
 python app.py
-# → http://localhost:5001
+```
 
-# 终端 2 — 启动 Streamlit 前端
-conda activate 你的环境
-cd ..
+终端 2：启动 Streamlit 前端
+
+Windows PowerShell：
+
+```powershell
+$env:INDETERMINATE_API_BASE="http://127.0.0.1:5001/api"
+streamlit run main.py
+```
+
+macOS / Linux：
+
+```bash
+export INDETERMINATE_API_BASE=http://127.0.0.1:5001/api
+streamlit run main.py
+```
+
+Windows CMD：
+
+```bat
 set INDETERMINATE_API_BASE=http://127.0.0.1:5001/api
 streamlit run main.py
-# → http://localhost:8501
+```
+
+默认地址：
+
+```text
+Flask 后端: http://localhost:5001
+Streamlit 前端: http://localhost:8501
+```
+
+### 使用
+
+1. 打开 `http://localhost:8501`
+2. 在首页查看运行环境状态
+3. 在「数据加载」页面上传 CSV/Excel
+4. 在「数据可视化」页面探索数据
+5. 在 ML 页面训练模型并预测
+6. 在「大模型分析」页面使用 Smart / Direct / Agent 模式
+
+### 清理缓存
+
+Windows：
+
+```bat
+clean.bat
+```
+
+macOS / Linux：
+
+```bash
+find . -type d -name "__pycache__" -prune -exec rm -rf {} +
+find backend/sessions -type f \( -name "*.parquet" -o -name "*.meta.json" \) -delete
+```
+
+### 运行测试
+
+```bash
+python -m unittest discover -s tests
+python -m compileall backend pages tests
+```
+
+测试覆盖训练前校验、Flask 上传/训练/预测冒烟流程，适合在修改 ML 或 API 逻辑后快速确认主链路没有断。
+
+### 常用地址
+
+```text
+后端健康检查: http://localhost:5001/api/health
+前端页面:     http://localhost:8501
 ```
 
 可选配置：
@@ -103,51 +189,21 @@ streamlit run main.py
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `FLASK_PORT` | `5001` | Flask 后端端口 |
-| `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（有安全风险，仅开发用；默认不向前端暴露 500 内部异常细节） |
+| `FLASK_DEBUG` | `0` | 设为 `1` 开启 Flask debug 模式（仅开发用） |
 | `INDETERMINATE_API_BASE` | `http://127.0.0.1:5001/api` | 前端 API 地址 |
 | `LLM_API_KEY` | 无 | LLM 默认 API 密钥，设置后前端无需手动填写 |
-| `LLM_ALLOW_LOCAL_API_BASE` | `0` | 设为 `1` 才允许 LLM API Base 使用 localhost/私网地址，仅建议本地开发使用 |
-
-### 4. 清理缓存
-
-```bash
-# Windows: 双击 clean.bat
-# 或手动:
-powershell -ExecutionPolicy Bypass -File clean.ps1          # 交互模式
-powershell -ExecutionPolicy Bypass -File clean.ps1 -WhatIf  # 预览模式（不实际删除）
-powershell -ExecutionPolicy Bypass -File clean.ps1 -Force   # 跳过确认直接删除
-```
-
-清理范围：`__pycache__` 目录、模型文件（.pth/.pkl 等）、模型版本目录、session 数据、日志、临时文件。**保留** `registry.json` 和代码文件。
-
-### 5. 使用
-
-1. 打开 `http://localhost:8501`
-2. 在首页查看运行环境状态：Python、PyTorch、CUDA、Flask 后端和关键库是否可用
-3. 在「数据加载」页面上传 CSV/Excel
-4. 在「数据可视化」页面探索数据
-5. 在「数据处理」页面清洗和转换
-6. 在 ML 页面（回归/分类/DIY MLP/决策树/聚类）训练模型并预测
-7. 在「大模型分析」页面与 AI 对话：Smart 模式推荐方向、Direct 模式深入分析、Agent 模式让 AI 自主执行训练和推理
-
-### 6. 运行测试
-
-```bash
-python -m unittest discover -s tests
-python -m compileall .\backend .\pages .\tests
-```
-
-测试覆盖训练前校验、Flask 上传/训练/预测冒烟流程，适合在修改 ML 或 API 逻辑后快速确认主链路没有断。
+| `LLM_ALLOW_LOCAL_API_BASE` | `0` | 设为 `1` 才允许 LLM API Base 使用 localhost/私网地址 |
 
 ## 项目结构
 
 ```
 MyWeb1/
 ├── main.py                      # Streamlit 首页
-├── requirements.txt             # 前端依赖
-├── setup.bat / setup.ps1        # 一键环境配置（自动检测 GPU 安装 PyTorch）
-├── start.bat / start.ps1        # 一键启动（自动检测 Python/Conda/uv 并启动前后端）
-├── clean.bat / clean.ps1        # 清理缓存（__pycache__、模型文件、session 数据、日志等）
+├── requirements.txt             # 完整依赖入口（前端 + 后端）
+├── requirements-frontend.txt    # 仅前端依赖
+├── setup.bat / setup.ps1        # Windows 可选安装脚本（自动检测 GPU 安装 PyTorch）
+├── start.bat / start.ps1        # Windows 可选启动脚本（启动前后端）
+├── clean.bat / clean.ps1        # Windows 可选清理脚本（缓存、模型文件、session、日志等）
 ├── pages/                       # Streamlit 页面
 │   ├── _api.py                  # Flask API 客户端（所有后端调用集中管理）
 │   ├── _prepare.py              # 公共组件（数据上传、侧边栏导航，detect_outliers 从 backend 导入）
@@ -164,7 +220,7 @@ MyWeb1/
 │   └── 9_llm_analysis.py        # 大模型分析（SSE 流式聊天）
 ├── backend/                     # Flask 后端
 │   ├── app.py                   # Flask 入口（session 管理、blueprint 注册）
-│   ├── requirements.txt         # 后端依赖
+│   ├── requirements.txt         # 仅后端依赖
 │   ├── session_store.py         # Session 持久化（内存 + Parquet/JSON 磁盘），支持重启恢复
 │   ├── routes/                  # API 路由层（参数校验 + 调用 service）
 │   │   ├── _versioning.py       # 共享版本管理路由工厂（5 模块共用）

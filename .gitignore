@@ -41,6 +41,7 @@ models/*
 !models/.gitkeep
 !backend/models/registry.py
 backend/models/registry.json
+backend/models/*_config.json
 
 *.pth
 *.pt

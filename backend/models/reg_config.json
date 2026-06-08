@@ -1,1 +1,0 @@
-{"features": ["math score", "reading score"], "target": "writing score", "hidden1": 4, "hidden2": 2, "dropout_rate": 0.2, "r2": -0.34139013290405273, "mae": 16.742765426635742, "rmse": 17.9804844496727}
