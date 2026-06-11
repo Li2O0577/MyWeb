@@ -1,18 +1,20 @@
 @echo off
-:: Indeterminate — Quick Launcher (Flask + Streamlit)
-:: Double-click to run
+setlocal
 
 cd /d "%~dp0"
 
 echo.
-echo ===== Indeterminate (Flask + Streamlit) =====
-echo Launching startup script...
+echo ===== Indeterminate Start =====
+echo Starting Flask and Streamlit...
 echo.
 
-powershell -ExecutionPolicy Bypass -File "%~dp0start.ps1"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1"
 
-if %ERRORLEVEL% NEQ 0 (
+if errorlevel 1 (
     echo.
-    echo Script failed! Right-click start.ps1 -^> "Run with PowerShell"
+    echo Start failed. Please open PowerShell in this folder and run:
+    echo powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+    echo.
     pause
+    exit /b 1
 )

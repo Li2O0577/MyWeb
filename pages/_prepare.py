@@ -36,12 +36,56 @@ def _outlier_warning(outlier_info):
     st.warning(msg)
 
 
+def _quick_ops_key(name):
+    source_hash = st.session_state.get("_source_file_hash", "no_file")[:12]
+    return f"quick_ops_{name}_{source_hash}"
+
+
+def _render_quick_operations(df):
+    """Render persistent quick cleanup controls for the current uploaded dataset."""
+    if df is None:
+        return df
+
+    with st.expander("🛠️ 快速操作", expanded=False):
+        st.caption("用于导入后做轻量清理。选择操作后点击“应用快速处理”，结果会保存为当前数据集。")
+        col1, col2 = st.columns(2)
+        with col1:
+            drop_na = st.checkbox("删除包含空值的行", key=_quick_ops_key("drop_na"))
+        with col2:
+            drop_dup = st.checkbox("删除重复行", key=_quick_ops_key("drop_dup"))
+
+        to_drop = st.multiselect("删除列", df.columns.tolist(), key=_quick_ops_key("drop_cols"))
+        apply_ops = st.button("应用快速处理", key=_quick_ops_key("apply"), use_container_width=True)
+
+        if apply_ops:
+            new_df = df.copy()
+            if drop_na:
+                new_df = new_df.dropna()
+            if drop_dup:
+                new_df = new_df.drop_duplicates()
+            if to_drop:
+                new_df = new_df.drop(columns=to_drop, errors="ignore")
+            new_df = new_df.reset_index(drop=True)
+
+            st.session_state["main_df"] = new_df
+            st.session_state._data_loaded = True
+            st.session_state._data_cleaned = True
+            st.session_state.outliers = detect_outliers(
+                new_df,
+                coefficient=st.session_state.get("outlier_coefficient", 3.0),
+            )
+            st.toast("快速处理已应用。", icon="✅")
+            st.rerun()
+
+    return df
+
+
 def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True):
     """Data upload component. If upload_to_backend=True, also sends file to Flask."""
     if "original_df" not in st.session_state:
         st.session_state.original_df = None
     if "outlier_coefficient" not in st.session_state:
-        st.session_state.outlier_coefficient = 1.5
+        st.session_state.outlier_coefficient = 3.0
 
     st.subheader("📂 数据导入")
     uploaded_file = st.file_uploader("上传 CSV/Excel", type=["csv", "xlsx"], key="global_uploader")
@@ -70,21 +114,8 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                 else:
                     df = pd.read_excel(io.BytesIO(raw_bytes))
 
-                with st.expander("🛠️ 快速操作"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.checkbox("删除空格所在行"):
-                            df = df.dropna()
-                    with col2:
-                        if st.checkbox("删除重复行"):
-                            df = df.drop_duplicates()
-
-                    to_drop = st.multiselect("删除列", df.columns)
-                    if to_drop:
-                        df = df.drop(columns=to_drop)
-
                 # 2. Store df locally FIRST — data is immediately available to all pages
-                outlier_info = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
+                outlier_info = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 3.0))
                 st.session_state.outliers = outlier_info
                 st.session_state['main_df'] = df
                 st.session_state._data_loaded = True
@@ -97,6 +128,7 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
                 if warn_outliers and outlier_info:
                     _outlier_warning(outlier_info)
 
+                _render_quick_operations(df)
                 return df
 
             except Exception as e:
@@ -106,17 +138,21 @@ def data_uploader(warn_outliers=True, force_cached=False, upload_to_backend=True
         if 'main_df' in st.session_state:
             df = st.session_state['main_df']
             if force_cached or 'outliers' not in st.session_state:
-                st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
+                st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 3.0))
             if warn_outliers:
                 _outlier_warning(st.session_state.outliers)
+            if uploaded_file is not None:
+                _render_quick_operations(df)
             return df
 
     if 'main_df' in st.session_state:
         df = st.session_state['main_df']
         if 'outliers' not in st.session_state:
-            st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 1.5))
+            st.session_state.outliers = detect_outliers(df, coefficient=st.session_state.get("outlier_coefficient", 3.0))
         if warn_outliers:
             _outlier_warning(st.session_state.outliers)
+        if uploaded_file is not None:
+            _render_quick_operations(df)
         return df
 
     return None

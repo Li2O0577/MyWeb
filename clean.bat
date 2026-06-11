@@ -1,18 +1,20 @@
 @echo off
-:: Indeterminate — Clean Cache & Model Files
-:: Double-click to run
+setlocal
 
 cd /d "%~dp0"
 
 echo.
-echo ===== Indeterminate - Clean Cache ^& Models =====
-echo Launching cleanup script...
+echo ===== Indeterminate Clean =====
+echo Starting cleanup script...
 echo.
 
-powershell -ExecutionPolicy Bypass -File "%~dp0clean.ps1"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0clean.ps1"
 
-if %ERRORLEVEL% NEQ 0 (
+if errorlevel 1 (
     echo.
-    echo Script failed! Right-click clean.ps1 -^> "Run with PowerShell"
+    echo Clean failed. Please open PowerShell in this folder and run:
+    echo powershell -NoProfile -ExecutionPolicy Bypass -File .\clean.ps1
+    echo.
     pause
+    exit /b 1
 )

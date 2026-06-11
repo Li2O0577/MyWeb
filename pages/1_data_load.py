@@ -21,7 +21,7 @@ def _apply_fix(df):
 
 # ── Coefficient selector ──
 if "outlier_coefficient" not in st.session_state:
-    st.session_state.outlier_coefficient = 1.5
+    st.session_state.outlier_coefficient = 3.0
 
 coeff_label = st.radio(
     "异常值检测灵敏度",
