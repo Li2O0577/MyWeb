@@ -1,0 +1,13 @@
+# Python dependencies for the Flask backend.
+#
+# React dependencies live in frontend/package.json and are installed with:
+#   cd frontend
+#   npm install
+#
+# Recommended local Python environment on this machine:
+#   conda run -n ml0 python -m pip install -r requirements.txt
+#
+# For GPU training, reinstall PyTorch with the CUDA wheel that matches your
+# machine if the default torch package is not suitable:
+#   https://pytorch.org/get-started/locally/
+-r backend/requirements.txt

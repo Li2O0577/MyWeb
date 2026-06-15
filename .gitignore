@@ -1,0 +1,84 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# 密钥/配置
+.env
+.env.*
+!.env.example
+config.json
+secret.json
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# 日志
+logs/
+*.log
+*.err.log
+log/
+
+# 测试/覆盖率产物
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+
+# 模型文件（训练产物）
+models/*
+!models/.gitkeep
+!backend/models/registry.py
+backend/models/registry.json
+backend/models/*_config.json
+
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pb
+*.pkl
+*.npz
+*.joblib
+*.safetensors
+*.ckpt
+*.bin
+*.sav
+
+# Session 数据文件（Parquet + 元数据）
+*.parquet
+*.meta.json
+
+# 临时文件
+*.tmp
+*.temp
+tmp/
+temp/
+
+# React/Vite 前端产物
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+
+# 后端 session 临时数据
+backend/sessions/
+
+# Claude 配置（不提交）
+CLAUDE.md
+AGENTS.md
