@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, export_text
-from sklearn.metrics import accuracy_score, confusion_matrix, r2_score, mean_absolute_error, mean_squared_error
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, r2_score, mean_absolute_error, mean_squared_error
 
 from models.registry import (
     get_model_paths, create_version_dir, register_version, generate_version_id,
@@ -60,6 +60,14 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
         result["cm"] = confusion_matrix(y_test, y_pred).tolist()
         unique_labels = sorted(set(y_test) | set(y_pred))
         result["label_names"] = [str(l) for l in unique_labels]
+        result["classification_report"] = classification_report(
+            y_test,
+            y_pred,
+            labels=unique_labels,
+            target_names=result["label_names"],
+            output_dict=True,
+            zero_division=0,
+        )
     else:
         result["r2"] = float(r2_score(y_test, y_pred))
         result["mae"] = float(mean_absolute_error(y_test, y_pred))
@@ -140,6 +148,7 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
         "tree_rules": result.get("tree_rules", ""),
         "tree_nodes": result.get("tree_nodes", []),
         "criterion_name": result.get("criterion_name", criterion),
+        "classification_report": result.get("classification_report", {}),
     }, {"model": "model.pkl", "config": "config.json"})
 
     return result, None
@@ -182,3 +191,39 @@ def predict_one(input_dict, task_type, version_id=None):
         return result, None
     else:
         return {"pred_value": float(pred)}, None
+
+
+def predict_batch(input_rows, task_type, version_id=None):
+    """Batch prediction. input_rows is a list of row dicts keyed by feature name."""
+    import pandas as pd
+    paths, meta = get_model_paths("decision_tree", version_id)
+    if not paths:
+        return None, ("MODEL_NOT_FOUND", "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。")
+
+    model_task = meta.get("params", {}).get("task_type") if meta else None
+    if model_task and model_task != task_type:
+        task_names = {"classification": "分类", "regression": "回归"}
+        return None, ("TASK_MISMATCH",
+            f"当前决策树版本是{task_names.get(model_task, model_task)}模型，"
+            f"但本次请求按{task_names.get(task_type, task_type)}任务预测。"
+            "请切换到匹配的模型版本，或重新训练当前任务。"
+        )
+
+    if not isinstance(input_rows, list) or not input_rows:
+        return None, ("PREDICTION_FAILED", "批量预测输入为空，请提供 rows。")
+    if len(input_rows) > 10000:
+        return None, ("PREDICTION_FAILED", f"单次预测最多支持 10000 行，当前为 {len(input_rows)} 行。")
+
+    pipeline = _safe_load_pickle(paths["model"])
+    input_df = pd.DataFrame(input_rows)
+    preds = pipeline.predict(input_df)
+
+    if task_type == "classification":
+        result_rows = [{"pred_class": str(pred)} for pred in preds]
+        if hasattr(pipeline, "predict_proba"):
+            probs = pipeline.predict_proba(input_df)
+            for row, prob_row in zip(result_rows, probs):
+                row["prob"] = float(max(prob_row)) if len(prob_row) else None
+        return {"predictions": result_rows}, None
+
+    return {"predictions": [{"pred_value": float(pred)} for pred in preds]}, None

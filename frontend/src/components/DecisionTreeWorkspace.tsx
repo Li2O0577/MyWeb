@@ -1,18 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Brain,
   CheckCircle2,
+  Download,
   GitBranch,
   ListTree,
   Play,
   RefreshCcw,
   Rows3,
   Send,
-  Trash2
+  Trash2,
+  Upload
 } from "lucide-react";
 import {
   activateModelVersion,
+  batchPredictModel,
   clearModel,
   deleteModelVersion,
   fetchModelStatus,
@@ -28,6 +31,7 @@ interface Props {
 }
 
 type TaskType = "classification" | "regression";
+type TreeTab = "train" | "result" | "predict";
 
 interface TreeNode {
   id: number;
@@ -46,6 +50,7 @@ interface DecisionTreeResult extends ApiJson {
   rmse?: number;
   cm?: number[][];
   label_names?: string[];
+  classification_report?: Record<string, unknown>;
   tree_rules?: string;
   tree_nodes?: TreeNode[];
   criterion_name?: string;
@@ -55,6 +60,12 @@ interface DecisionTreeResult extends ApiJson {
   target?: string;
   categorical_features?: string[];
   has_model?: boolean;
+}
+
+interface TreeBatchRow {
+  source: Record<string, string>;
+  prediction?: string | number;
+  confidence?: number;
 }
 
 function formatNumber(value: unknown, digits = 4) {
@@ -144,6 +155,39 @@ function ConfusionMatrix({ matrix, labels }: { matrix?: number[][]; labels?: str
   );
 }
 
+function ClassificationReportTable({ report }: { report?: Record<string, unknown> }) {
+  const rows = Object.entries(report ?? {})
+    .filter(([, value]) => value && typeof value === "object")
+    .map(([label, value]) => ({ label, metrics: value as Record<string, unknown> }));
+  if (!rows.length) return <div className="empty-list">分类训练后显示 precision / recall / F1 报告。</div>;
+  return (
+    <div className="table-wrap compact-table report-table-wrap">
+      <table className="data-table report-table">
+        <thead>
+          <tr>
+            <th>类别</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
+            <th>Support</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, metrics }) => (
+            <tr key={label}>
+              <td>{label}</td>
+              <td>{formatNumber(metrics.precision)}</td>
+              <td>{formatNumber(metrics.recall)}</td>
+              <td>{formatNumber(metrics["f1-score"])}</td>
+              <td>{formatNumber(metrics.support, 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ProbabilityBars({ result }: { result: ApiJson | null }) {
   const probs = (result?.all_probs ?? []) as number[];
   const labels = (result?.label_names ?? []) as string[];
@@ -161,6 +205,62 @@ function ProbabilityBars({ result }: { result: ApiJson | null }) {
   );
 }
 
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let cell = "";
+  let row: string[] = [];
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(cell);
+      if (row.some((item) => item.trim() !== "")) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((item) => item.trim() !== "")) rows.push(row);
+  if (!rows.length) return [];
+  const headers = rows[0].map((item) => item.trim());
+  return rows.slice(1).map((values) => {
+    const record: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      record[header] = values[index] ?? "";
+    });
+    return record;
+  });
+}
+
+function toBatchCsv(rows: TreeBatchRow[], target: string) {
+  const predictionHeader = `prediction_${target || "target"}`;
+  const headers = rows.length ? [...Object.keys(rows[0].source), predictionHeader, "confidence"] : [predictionHeader, "confidence"];
+  const escape = (value: unknown) => {
+    const text = valueToText(value);
+    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [
+    headers.map(escape).join(","),
+    ...rows.map((row) => headers.map((header) => {
+      if (header === predictionHeader) return escape(row.prediction);
+      if (header === "confidence") return escape(row.confidence);
+      return escape(row.source[header]);
+    }).join(","))
+  ].join("\n");
+}
+
 export default function DecisionTreeWorkspace({ profile }: Props) {
   const [taskType, setTaskType] = useState<TaskType>("classification");
   const [targetCol, setTargetCol] = useState(defaultTarget(profile, "classification"));
@@ -173,9 +273,13 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
   const [activeVersion, setActiveVersion] = useState<string | null | undefined>(null);
   const [selectedVersion, setSelectedVersion] = useState("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [batchRows, setBatchRows] = useState<TreeBatchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
   const [error, setError] = useState("");
+  const [batchError, setBatchError] = useState("");
+  const [activeTab, setActiveTab] = useState<TreeTab>("train");
 
   const classificationCriteria = ["entropy", "gini"];
   const regressionCriteria = ["squared_error", "friedman_mse", "absolute_error", "poisson"];
@@ -195,6 +299,7 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
     setCriterion(taskType === "classification" ? "entropy" : "squared_error");
     setTrainResult(null);
     setPredictResult(null);
+    setBatchRows([]);
   }, [profile.session_id, taskType]);
 
   useEffect(() => {
@@ -252,6 +357,7 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
     setLoading(true);
     setError("");
     setPredictResult(null);
+    setBatchRows([]);
     try {
       const payload = await trainModel("decision_tree", {
         session_id: profile.session_id,
@@ -263,6 +369,7 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
       });
       const normalized = normalizeResult(payload);
       setTrainResult(normalized);
+      setActiveTab("result");
       if (normalized?.version_id) {
         setSelectedVersion(normalized.version_id);
         setActiveVersion(normalized.version_id);
@@ -305,10 +412,81 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
       await clearModel("decision_tree");
       setTrainResult(null);
       setPredictResult(null);
+      setBatchRows([]);
       await loadDecisionTreeState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "清除模型失败");
     }
+  };
+
+  const handleBatchFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBatchError("");
+    setBatchRows([]);
+    try {
+      const parsed = parseCsv(await file.text());
+      if (!parsed.length) {
+        setBatchError("CSV 文件为空或无法解析。");
+        return;
+      }
+      if (parsed.length > 10000) {
+        setBatchError(`单次最多支持 10000 行，当前为 ${parsed.length} 行。`);
+        return;
+      }
+      const missing = featureCols.filter((column) => !(column in parsed[0]));
+      if (missing.length) {
+        setBatchError(`CSV 缺少模型需要的特征列：${missing.join("、")}`);
+        return;
+      }
+      setBatchRows(parsed.map((row) => ({ source: row })));
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : "CSV 读取失败");
+    }
+  };
+
+  const handleBatchPredict = async () => {
+    if (!batchRows.length) return;
+    setBatchLoading(true);
+    setBatchError("");
+    try {
+      const payload = await batchPredictModel("decision_tree", {
+        rows: batchRows.map((row) => {
+          const record: Record<string, string> = {};
+          featureCols.forEach((column) => {
+            record[column] = row.source[column] ?? "";
+          });
+          return record;
+        }),
+        task_type: taskType,
+        version_id: selectedVersion || undefined
+      });
+      const predictions = (payload.predictions ?? []) as Array<Record<string, unknown>>;
+      setBatchRows((current) => current.map((row, index) => {
+        const item = predictions[index] ?? {};
+        return {
+          ...row,
+          prediction: taskType === "classification" ? valueToText(item.pred_class) : Number(item.pred_value),
+          confidence: typeof item.prob === "number" ? item.prob : undefined
+        };
+      }));
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : "决策树批量预测失败");
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const downloadBatchResult = () => {
+    const csv = toBatchCsv(batchRows, targetCol);
+    const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "decision_tree_predictions.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const handlePredict = async () => {
@@ -356,7 +534,15 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
         </div>
       ) : null}
 
-      <div className="dt-layout">
+      <div className="workflow-tabbar three" role="tablist" aria-label="决策树功能分区">
+        <button className={activeTab === "train" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "train"} onClick={() => setActiveTab("train")}>训练配置</button>
+        <button className={activeTab === "result" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "result"} onClick={() => setActiveTab("result")}>结果与规则</button>
+        <button className={activeTab === "predict" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "predict"} onClick={() => setActiveTab("predict")}>模型预测</button>
+      </div>
+
+      {activeTab === "train" || activeTab === "result" ? (
+      <div className="dt-layout single-pane">
+        {activeTab === "train" ? (
         <aside className="dt-config" aria-label="决策树训练配置">
           <div className="panel-title split">
             <span>
@@ -427,7 +613,9 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
             </button>
           </div>
         </aside>
+        ) : null}
 
+        {activeTab === "result" ? (
         <section className="dt-main" aria-label="决策树结果">
           <article className="dt-panel">
             <div className="panel-title split">
@@ -442,6 +630,19 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
               <ConfusionMatrix matrix={trainResult?.cm} labels={trainResult?.label_names} />
             ) : null}
           </article>
+
+          {taskType === "classification" ? (
+            <article className="dt-panel">
+              <div className="panel-title split">
+                <span>
+                  <ListTree size={17} aria-hidden="true" />
+                  <h2>分类报告</h2>
+                </span>
+                <small>precision / recall / F1</small>
+              </div>
+              <ClassificationReportTable report={trainResult?.classification_report} />
+            </article>
+          ) : null}
 
           <article className="dt-panel">
             <div className="panel-title split">
@@ -498,10 +699,14 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
             )}
           </article>
         </section>
+        ) : null}
       </div>
+      ) : null}
 
-      <div className="dt-bottom-grid">
-        <article className="dt-panel">
+      {activeTab === "predict" ? (
+      <>
+        <div className="dt-bottom-grid">
+          <article className="dt-panel">
           <div className="panel-title split">
             <span>
               <RefreshCcw size={17} aria-hidden="true" />
@@ -527,9 +732,9 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
               </div>
             )) : <div className="empty-list">暂无决策树版本。</div>}
           </div>
-        </article>
+          </article>
 
-        <article className="dt-panel">
+          <article className="dt-panel">
           <div className="panel-title">
             <Send size={17} aria-hidden="true" />
             <h2>单条预测</h2>
@@ -572,8 +777,57 @@ export default function DecisionTreeWorkspace({ profile }: Props) {
               <ProbabilityBars result={predictResult} />
             </div>
           ) : null}
+          </article>
+        </div>
+
+        <article className="dt-panel tree-batch-panel">
+          <div className="panel-title split">
+            <span>
+              <Upload size={17} aria-hidden="true" />
+              <h2>批量预测</h2>
+            </span>
+            <small>CSV · 最多 10000 行</small>
+          </div>
+          <div className="batch-toolbar">
+            <label className="button ghost file-button">
+              <Upload size={15} aria-hidden="true" />
+              上传批量 CSV
+              <input type="file" accept=".csv" onChange={handleBatchFile} />
+            </label>
+            <button className="button primary" type="button" disabled={!batchRows.length || batchLoading} onClick={handleBatchPredict}>
+              {batchLoading ? "预测中..." : "执行批量预测"}
+            </button>
+            <button className="button ghost" type="button" disabled={!batchRows.some((row) => row.prediction !== undefined)} onClick={downloadBatchResult}>
+              <Download size={15} aria-hidden="true" />
+              下载结果
+            </button>
+          </div>
+          {batchError ? <div className="inline-error">{batchError}</div> : null}
+          {batchRows.length ? (
+            <div className="table-wrap compact-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {featureCols.slice(0, 8).map((column) => <th key={column}>{column}</th>)}
+                    <th>预测_{targetCol}</th>
+                    {taskType === "classification" ? <th>置信度</th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {batchRows.slice(0, 12).map((row, index) => (
+                    <tr key={index}>
+                      {featureCols.slice(0, 8).map((column) => <td key={column}>{row.source[column]}</td>)}
+                      <td>{row.prediction ?? "-"}</td>
+                      {taskType === "classification" ? <td>{row.confidence === undefined ? "-" : formatNumber(row.confidence)}</td> : null}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="empty-list">上传包含当前特征列的 CSV 后可批量预测。</div>}
         </article>
-      </div>
+      </>
+      ) : null}
 
       {cleanRows < profile.n_rows ? (
         <div className="inline-warning">

@@ -8,17 +8,29 @@ import {
   Columns3,
   Download,
   Eraser,
+  History,
   ListChecks,
+  PlayCircle,
+  Redo2,
   Rows3,
+  Save,
   Sigma,
   Sparkles,
   SplitSquareHorizontal,
   Trash2,
   Type,
+  Undo2,
   Wand2
 } from "lucide-react";
-import { processData } from "../services/api";
-import type { DataProfile, DataUploadResponse } from "../types";
+import {
+  applyProcessingPipeline,
+  fetchProcessingHistory,
+  processData,
+  redoProcessing,
+  saveProcessingPipeline,
+  undoProcessing
+} from "../services/api";
+import type { DataProfile, DataUploadResponse, ProcessingHistory, ProcessingPipeline } from "../types";
 
 type Operation = Record<string, unknown>;
 
@@ -77,6 +89,41 @@ function formatStat(value: unknown) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function formatTime(seconds: number) {
+  if (!seconds) return "-";
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function operationLabel(operation: Operation) {
+  const labels: Record<string, string> = {
+    select_cols: "保留字段",
+    drop_na: "删除缺失行",
+    drop_duplicates: "删除重复行",
+    drop_cols: "删除字段",
+    drop_rows: "删除行",
+    rename_col: "重命名字段",
+    cast_type: "类型转换",
+    fill_na: "缺失值填充",
+    scale: "数值缩放",
+    add_noise: "添加噪声",
+    label_encode: "标签编码",
+    one_hot_encode: "独热编码",
+    custom_formula: "表达式计算",
+    unary_calc: "一元计算",
+    binary_calc: "二元计算",
+    pca: "PCA 降维",
+    winsorize_outliers: "异常值缩尾",
+    replace_outliers: "异常值替换",
+    drop_outliers: "删除异常行"
+  };
+  return labels[String(operation.op)] ?? String(operation.op ?? "处理步骤");
+}
+
 export default function DataProcessingWorkspace({ profile, onProfileChange }: DataProcessingWorkspaceProps) {
   const numericCols = profile.numeric_cols;
   const categoricalCols = profile.categorical_cols;
@@ -86,6 +133,9 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [history, setHistory] = useState<ProcessingHistory | null>(profile.processing_history ?? null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [pipelineName, setPipelineName] = useState("当前处理流水线");
   const [dropColumns, setDropColumns] = useState<string[]>([]);
   const [keepColumns, setKeepColumns] = useState<string[]>(profile.columns);
   const [rowPosition, setRowPosition] = useState(0);
@@ -146,6 +196,27 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
     });
   }, [outlierCandidateColumns]);
 
+  useEffect(() => {
+    if (profile.processing_history) {
+      setHistory(profile.processing_history);
+      return;
+    }
+    const controller = new AbortController();
+    fetchProcessingHistory(profile.session_id, controller.signal)
+      .then((payload) => setHistory(payload))
+      .catch(() => setHistory(null));
+    return () => controller.abort();
+  }, [profile.processing_history, profile.session_id]);
+
+  const refreshHistory = async () => {
+    try {
+      const payload = await fetchProcessingHistory(profile.session_id);
+      setHistory(payload);
+    } catch {
+      // History is supplementary; keep the data page usable even if it fails.
+    }
+  };
+
   const applyOperations = async (operations: Operation[], fallbackMessage: string) => {
     if (!operations.length) return;
     setBusy(true);
@@ -154,6 +225,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
     try {
       const payload = await processData(profile.session_id, operations);
       onProfileChange(payload);
+      if (payload.processing_history) setHistory(payload.processing_history);
       const applied = (payload as DataUploadResponse & { operations_applied?: string[] }).operations_applied;
       setMessage(applied?.length ? applied.join("；") : fallbackMessage);
       setDropColumns([]);
@@ -161,6 +233,53 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
       setError(err instanceof Error ? err.message : "数据处理失败");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runHistoryAction = async (action: "undo" | "redo") => {
+    setHistoryBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const payload = action === "undo" ? await undoProcessing(profile.session_id) : await redoProcessing(profile.session_id);
+      onProfileChange(payload);
+      if (payload.processing_history) setHistory(payload.processing_history);
+      setMessage(action === "undo" ? "已撤销上一步处理。" : "已重做下一步处理。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : action === "undo" ? "撤销失败" : "重做失败");
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
+  const savePipeline = async () => {
+    setHistoryBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const payload = await saveProcessingPipeline(profile.session_id, pipelineName);
+      setHistory(payload.processing_history);
+      setMessage("已保存当前数据处理流水线。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存流水线失败");
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
+  const applyPipeline = async (pipeline: ProcessingPipeline) => {
+    setHistoryBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const payload = await applyProcessingPipeline(profile.session_id, pipeline.pipeline_id);
+      onProfileChange(payload);
+      if (payload.processing_history) setHistory(payload.processing_history);
+      setMessage(`已应用流水线：${pipeline.name}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "应用流水线失败");
+    } finally {
+      setHistoryBusy(false);
     }
   };
 
@@ -192,6 +311,24 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
           <button
             className="button ghost"
             type="button"
+            disabled={busy || historyBusy || !history?.can_undo}
+            onClick={() => runHistoryAction("undo")}
+          >
+            <Undo2 size={15} aria-hidden="true" />
+            撤销
+          </button>
+          <button
+            className="button ghost"
+            type="button"
+            disabled={busy || historyBusy || !history?.can_redo}
+            onClick={() => runHistoryAction("redo")}
+          >
+            <Redo2 size={15} aria-hidden="true" />
+            重做
+          </button>
+          <button
+            className="button ghost"
+            type="button"
             disabled={busy}
             onClick={() => applyOperations([{ op: "drop_duplicates" }], "已删除重复行")}
           >
@@ -212,6 +349,74 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
 
       {message ? <div className="inline-success">{message}</div> : null}
       {error ? <div className="inline-error">{error}</div> : null}
+
+      <section className="operation-panel span-2 processing-history-panel" aria-label="数据处理历史">
+        <div className="panel-title split">
+          <span>
+            <History size={17} aria-hidden="true" />
+            <h2>操作历史与流水线</h2>
+          </span>
+          <small>{history ? `当前位置 ${history.current_index + 1} / ${history.history.length}` : "正在读取历史"}</small>
+        </div>
+        <div className="history-layout">
+          <div className="history-list" aria-label="操作历史">
+            {history?.history.length ? (
+              history.history.map((entry, index) => (
+                <div className={index === history.current_index ? "history-row current" : "history-row"} key={entry.state_id}>
+                  <div>
+                    <strong>{entry.label}</strong>
+                    <span>{entry.n_rows.toLocaleString()} 行 · {entry.n_cols} 列 · {formatTime(entry.created_at)}</span>
+                    {entry.operations?.length ? <small>{entry.operations.map(operationLabel).join(" / ")}</small> : null}
+                  </div>
+                  <span className="history-index">{index === history.current_index ? "当前" : `#${index + 1}`}</span>
+                </div>
+              ))
+            ) : (
+              <div className="empty-list">暂无处理历史。</div>
+            )}
+          </div>
+
+          <div className="pipeline-panel" aria-label="保存的流水线">
+            <div className="operation-columns two">
+              <label className="form-field">
+                <span>流水线名称</span>
+                <input value={pipelineName} onChange={(event) => setPipelineName(event.target.value)} />
+              </label>
+              <button
+                className="button primary align-end"
+                type="button"
+                disabled={busy || historyBusy || !history?.can_undo}
+                onClick={savePipeline}
+              >
+                <Save size={15} aria-hidden="true" />
+                保存流水线
+              </button>
+            </div>
+            <div className="pipeline-list">
+              {history?.pipelines?.length ? (
+                history.pipelines.map((pipeline) => (
+                  <div className="pipeline-row" key={pipeline.pipeline_id}>
+                    <div>
+                      <strong>{pipeline.name}</strong>
+                      <span>{pipeline.step_count} 步 · {formatTime(pipeline.created_at)}</span>
+                    </div>
+                    <button className="button ghost" type="button" disabled={busy || historyBusy} onClick={() => applyPipeline(pipeline)}>
+                      <PlayCircle size={15} aria-hidden="true" />
+                      应用
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-list">保存后可在同一 session 内重复应用。</div>
+              )}
+            </div>
+            <button className="button ghost" type="button" disabled={historyBusy} onClick={refreshHistory}>
+              <History size={15} aria-hidden="true" />
+              刷新历史
+            </button>
+          </div>
+        </div>
+      </section>
 
       <div className="operation-grid">
         <article className="operation-panel span-2">

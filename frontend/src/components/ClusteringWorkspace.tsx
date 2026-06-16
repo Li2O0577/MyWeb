@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
   Brain,
   CircleDot,
+  Download,
   GitPullRequest,
   Play,
   RefreshCcw,
   Send,
-  Trash2
+  Trash2,
+  Upload
 } from "lucide-react";
 import {
   activateModelVersion,
+  batchPredictModel,
   clearModel,
   deleteModelVersion,
   fetchClusteringElbow,
@@ -28,6 +31,7 @@ interface Props {
 }
 
 type Algorithm = "kmeans" | "dbscan";
+type ClusterTab = "train" | "result" | "predict";
 
 interface PcaPayload {
   x?: number[];
@@ -59,6 +63,11 @@ interface ElbowResult extends ApiJson {
   ks?: number[];
   inertias?: number[];
   warning?: string;
+}
+
+interface ClusterBatchRow {
+  source: Record<string, string>;
+  cluster?: number;
 }
 
 const CLUSTER_COLORS = ["#a4512a", "#326b7b", "#7c6a34", "#6f5b9a", "#3f7b55", "#a23b52", "#506b9a", "#8b6f47"];
@@ -201,6 +210,71 @@ function ClusterCounts({ counts }: { counts?: Record<string, number> }) {
   );
 }
 
+function clusterExplanation(cluster: unknown, result: ClusterResult | null) {
+  const key = String(cluster);
+  const count = result?.cluster_counts?.[key];
+  if (key === "-1") {
+    return count === undefined
+      ? "该样本被判为噪声点。"
+      : `该样本被判为噪声点，训练集中噪声点有 ${count.toLocaleString()} 条。`;
+  }
+  if (count !== undefined) {
+    return `该样本被分配到簇 ${key}，训练集中该簇包含 ${count.toLocaleString()} 条样本。`;
+  }
+  return `该样本被分配到簇 ${key}。簇编号只表示分组，不代表好坏或大小顺序。`;
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let cell = "";
+  let row: string[] = [];
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(cell);
+      if (row.some((item) => item.trim() !== "")) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((item) => item.trim() !== "")) rows.push(row);
+  if (!rows.length) return [];
+  const headers = rows[0].map((item) => item.trim());
+  return rows.slice(1).map((values) => {
+    const record: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      record[header] = values[index] ?? "";
+    });
+    return record;
+  });
+}
+
+function toBatchCsv(rows: ClusterBatchRow[]) {
+  const headers = rows.length ? [...Object.keys(rows[0].source), "cluster"] : ["cluster"];
+  const escape = (value: unknown) => {
+    const text = valueToText(value);
+    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [
+    headers.map(escape).join(","),
+    ...rows.map((row) => headers.map((header) => escape(header === "cluster" ? row.cluster : row.source[header])).join(","))
+  ].join("\n");
+}
+
 export default function ClusteringWorkspace({ profile }: Props) {
   const [algorithm, setAlgorithm] = useState<Algorithm>("kmeans");
   const [featureCols, setFeatureCols] = useState<string[]>(defaultFeatures(profile));
@@ -215,9 +289,13 @@ export default function ClusteringWorkspace({ profile }: Props) {
   const [activeVersion, setActiveVersion] = useState<string | null | undefined>(null);
   const [selectedVersion, setSelectedVersion] = useState("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [batchRows, setBatchRows] = useState<ClusterBatchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
   const [error, setError] = useState("");
+  const [batchError, setBatchError] = useState("");
+  const [activeTab, setActiveTab] = useState<ClusterTab>("train");
 
   const cleanRows = cleanRowsEstimate(profile, featureCols);
   const maxClusterCount = Math.max(2, Math.min(15, cleanRows || profile.n_rows));
@@ -231,6 +309,7 @@ export default function ClusteringWorkspace({ profile }: Props) {
     setTrainResult(null);
     setElbowResult(null);
     setPredictResult(null);
+    setBatchRows([]);
   }, [profile.session_id]);
 
   useEffect(() => {
@@ -292,6 +371,7 @@ export default function ClusteringWorkspace({ profile }: Props) {
     setLoading(true);
     setError("");
     setPredictResult(null);
+    setBatchRows([]);
     try {
       const payload = await trainModel("clustering", {
         session_id: profile.session_id,
@@ -301,6 +381,7 @@ export default function ClusteringWorkspace({ profile }: Props) {
       });
       const normalized = normalizeClusterResult(payload);
       setTrainResult(normalized);
+      setActiveTab("result");
       if (normalized?.version_id) {
         setSelectedVersion(normalized.version_id);
         setActiveVersion(normalized.version_id);
@@ -324,6 +405,7 @@ export default function ClusteringWorkspace({ profile }: Props) {
         max_k: maxK
       });
       setElbowResult(payload as ElbowResult);
+      setActiveTab("result");
     } catch (err) {
       setError(err instanceof Error ? err.message : "肘部法则计算失败");
     } finally {
@@ -364,10 +446,72 @@ export default function ClusteringWorkspace({ profile }: Props) {
       await clearModel("clustering");
       setTrainResult(null);
       setPredictResult(null);
+      setBatchRows([]);
       await loadClusterState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "清除模型失败");
     }
+  };
+
+  const handleBatchFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBatchError("");
+    setBatchRows([]);
+    try {
+      const parsed = parseCsv(await file.text());
+      if (!parsed.length) {
+        setBatchError("CSV 文件为空或无法解析。");
+        return;
+      }
+      if (parsed.length > 10000) {
+        setBatchError(`单次最多支持 10000 行，当前为 ${parsed.length} 行。`);
+        return;
+      }
+      const missing = featureCols.filter((column) => !(column in parsed[0]));
+      if (missing.length) {
+        setBatchError(`CSV 缺少模型需要的特征列：${missing.join("、")}`);
+        return;
+      }
+      setBatchRows(parsed.map((row) => ({ source: row })));
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : "CSV 读取失败");
+    }
+  };
+
+  const handleBatchPredict = async () => {
+    if (!batchRows.length || !predictionEnabled) return;
+    setBatchLoading(true);
+    setBatchError("");
+    try {
+      const rows = batchRows.map((row) => featureCols.map((column) => Number(row.source[column])));
+      if (rows.some((row) => row.some((value) => !Number.isFinite(value)))) {
+        setBatchError("批量数据包含非数值、空值或无穷值，请先清洗后再预测。");
+        return;
+      }
+      const payload = await batchPredictModel("clustering", {
+        rows,
+        version_id: selectedVersion || undefined
+      });
+      const clusters = (payload.clusters ?? []) as number[];
+      setBatchRows((current) => current.map((row, index) => ({ ...row, cluster: Number(clusters[index]) })));
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : "聚类批量预测失败");
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const downloadBatchResult = () => {
+    const csv = toBatchCsv(batchRows);
+    const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "clustering_predictions.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const handlePredict = async () => {
@@ -413,7 +557,15 @@ export default function ClusteringWorkspace({ profile }: Props) {
         <div className="inline-warning">当前激活的聚类模型来自其他字段结构。版本已保留在列表中，当前数据请重新训练。</div>
       ) : null}
 
-      <div className="dt-layout cluster-layout">
+      <div className="workflow-tabbar three" role="tablist" aria-label="聚类功能分区">
+        <button className={activeTab === "train" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "train"} onClick={() => setActiveTab("train")}>聚类配置</button>
+        <button className={activeTab === "result" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "result"} onClick={() => setActiveTab("result")}>结果可视化</button>
+        <button className={activeTab === "predict" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "predict"} onClick={() => setActiveTab("predict")}>模型预测</button>
+      </div>
+
+      {activeTab === "train" || activeTab === "result" ? (
+      <div className="dt-layout cluster-layout single-pane">
+        {activeTab === "train" ? (
         <aside className="dt-config cluster-config" aria-label="聚类训练配置">
           <div className="panel-title split">
             <span>
@@ -497,7 +649,9 @@ export default function ClusteringWorkspace({ profile }: Props) {
             ))}
           </div>
         </aside>
+        ) : null}
 
+        {activeTab === "result" ? (
         <section className="dt-main" aria-label="聚类结果">
           <article className="dt-panel">
             <div className="panel-title split">
@@ -538,10 +692,14 @@ export default function ClusteringWorkspace({ profile }: Props) {
             <ElbowChart result={elbowResult} />
           </article>
         </section>
+        ) : null}
       </div>
+      ) : null}
 
-      <div className="dt-bottom-grid">
-        <article className="dt-panel">
+      {activeTab === "predict" ? (
+      <>
+        <div className="dt-bottom-grid">
+          <article className="dt-panel">
           <div className="panel-title split">
             <span>
               <RefreshCcw size={17} aria-hidden="true" />
@@ -567,9 +725,9 @@ export default function ClusteringWorkspace({ profile }: Props) {
               </div>
             )) : <div className="empty-list">暂无聚类版本。</div>}
           </div>
-        </article>
+          </article>
 
-        <article className="dt-panel">
+          <article className="dt-panel">
           <div className="panel-title split">
             <span>
               <Send size={17} aria-hidden="true" />
@@ -605,11 +763,65 @@ export default function ClusteringWorkspace({ profile }: Props) {
           {predictResult ? (
             <div className="prediction-result">
               <strong>预测簇：{String(predictResult.cluster)}</strong>
+              <span>{clusterExplanation(predictResult.cluster, trainResult)}</span>
               <span>簇编号只表示分组，不代表大小或好坏顺序。</span>
             </div>
           ) : null}
+          </article>
+        </div>
+
+        <article className="dt-panel cluster-batch-panel">
+          <div className="panel-title split">
+            <span>
+              <Upload size={17} aria-hidden="true" />
+              <h2>批量预测</h2>
+            </span>
+            <small>{predictionEnabled ? "CSV · 最多 10000 行" : "仅 K-means 支持"}</small>
+          </div>
+          <div className="batch-toolbar">
+            <label className="button ghost file-button">
+              <Upload size={15} aria-hidden="true" />
+              上传批量 CSV
+              <input type="file" accept=".csv" onChange={handleBatchFile} />
+            </label>
+            <button className="button primary" type="button" disabled={!batchRows.length || batchLoading || !predictionEnabled} onClick={handleBatchPredict}>
+              {batchLoading ? "预测中..." : "执行批量预测"}
+            </button>
+            <button className="button ghost" type="button" disabled={!batchRows.some((row) => row.cluster !== undefined)} onClick={downloadBatchResult}>
+              <Download size={15} aria-hidden="true" />
+              下载结果
+            </button>
+          </div>
+          {batchError ? <div className="inline-error">{batchError}</div> : null}
+          {!predictionEnabled ? (
+            <div className="inline-warning">
+              <AlertTriangle size={15} aria-hidden="true" />
+              DBSCAN 不支持稳定批量 predict；请切换或训练 K-means 版本。
+            </div>
+          ) : null}
+          {batchRows.length ? (
+            <div className="table-wrap compact-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {featureCols.slice(0, 8).map((column) => <th key={column}>{column}</th>)}
+                    <th>预测簇</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batchRows.slice(0, 12).map((row, index) => (
+                    <tr key={index}>
+                      {featureCols.slice(0, 8).map((column) => <td key={column}>{row.source[column]}</td>)}
+                      <td>{row.cluster ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="empty-list">上传包含当前特征列的 CSV 后可批量预测。</div>}
         </article>
-      </div>
+      </>
+      ) : null}
     </section>
   );
 }

@@ -4,7 +4,9 @@ import type {
   HealthResponse,
   LlmStreamEvent,
   ModelType,
-  ModelVersionsResponse
+  ModelVersionsResponse,
+  ProcessingHistory,
+  ProcessingPipeline
 } from "../types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/$/, "");
@@ -60,6 +62,89 @@ export async function processData(
   if (!response.ok) {
     const message =
       payload?.error?.detail || payload?.error?.message || `数据处理失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as DataUploadResponse;
+}
+
+export async function fetchProcessingHistory(sessionId: string, signal?: AbortSignal): Promise<ProcessingHistory> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}/history`, { signal });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `读取处理历史失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as ProcessingHistory;
+}
+
+export async function undoProcessing(sessionId: string, signal?: AbortSignal): Promise<DataUploadResponse> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}/undo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `撤销失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as DataUploadResponse;
+}
+
+export async function redoProcessing(sessionId: string, signal?: AbortSignal): Promise<DataUploadResponse> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}/redo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `重做失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as DataUploadResponse;
+}
+
+export async function saveProcessingPipeline(
+  sessionId: string,
+  name: string,
+  signal?: AbortSignal
+): Promise<{ pipeline: ProcessingPipeline; processing_history: ProcessingHistory }> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}/pipelines`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `保存流水线失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as { pipeline: ProcessingPipeline; processing_history: ProcessingHistory };
+}
+
+export async function applyProcessingPipeline(
+  sessionId: string,
+  pipelineId: string,
+  signal?: AbortSignal
+): Promise<DataUploadResponse> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}/pipelines/${encodeURIComponent(pipelineId)}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `应用流水线失败：HTTP ${response.status}`;
     throw new Error(message);
   }
   return payload as DataUploadResponse;

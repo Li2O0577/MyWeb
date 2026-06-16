@@ -34,6 +34,7 @@ interface Props {
 
 type TaskType = "regression" | "classification";
 type DeviceType = "cpu" | "cuda";
+type DiyTab = "train" | "result" | "predict" | "batch";
 
 interface LayerConfig {
   neurons: number;
@@ -310,6 +311,7 @@ export default function DiyMlpWorkspace({ profile }: Props) {
   const [batchLoading, setBatchLoading] = useState(false);
   const [error, setError] = useState("");
   const [batchError, setBatchError] = useState("");
+  const [activeTab, setActiveTab] = useState<DiyTab>("train");
 
   const targetProfile = profile.column_profiles.find((column) => column.name === targetCol);
   const nClasses = taskType === "classification" ? targetProfile?.unique_count ?? 0 : 0;
@@ -458,6 +460,7 @@ export default function DiyMlpWorkspace({ profile }: Props) {
       });
       const normalized = normalizeDiyMlpResult(payload);
       setTrainResult(normalized);
+      setActiveTab("result");
       if (normalized?.version_id) {
         setSelectedVersion(normalized.version_id);
         setActiveVersion(normalized.version_id);
@@ -644,7 +647,16 @@ export default function DiyMlpWorkspace({ profile }: Props) {
       {constantFeatures.length ? <div className="inline-warning">常量特征会影响训练：{constantFeatures.join("、")}。建议先到数据处理页移除。</div> : null}
       {tooManyClasses ? <div className="inline-warning">目标列类别数过多，可能是 ID 或连续值；请改选真正的分类标签。</div> : null}
 
-      <div className="dt-layout diy-layout">
+      <div className="diy-tabbar" role="tablist" aria-label="自定义 MLP 功能分区">
+        <button className={activeTab === "train" ? "diy-tab active" : "diy-tab"} type="button" role="tab" aria-selected={activeTab === "train"} onClick={() => setActiveTab("train")}>训练配置</button>
+        <button className={activeTab === "result" ? "diy-tab active" : "diy-tab"} type="button" role="tab" aria-selected={activeTab === "result"} onClick={() => setActiveTab("result")}>结果分析</button>
+        <button className={activeTab === "predict" ? "diy-tab active" : "diy-tab"} type="button" role="tab" aria-selected={activeTab === "predict"} onClick={() => setActiveTab("predict")}>模型预测</button>
+        <button className={activeTab === "batch" ? "diy-tab active" : "diy-tab"} type="button" role="tab" aria-selected={activeTab === "batch"} onClick={() => setActiveTab("batch")}>批量预测</button>
+      </div>
+
+      {activeTab === "train" || activeTab === "result" ? (
+      <div className="dt-layout diy-layout single-pane">
+        {activeTab === "train" ? (
         <aside className="dt-config diy-config" aria-label="自定义 MLP 训练配置">
           <div className="panel-title split">
             <span>
@@ -787,7 +799,9 @@ export default function DiyMlpWorkspace({ profile }: Props) {
             </button>
           </div>
         </aside>
+        ) : null}
 
+        {activeTab === "result" ? (
         <section className="dt-main" aria-label="自定义 MLP 训练结果">
           <article className="dt-panel">
             <div className="panel-title split">
@@ -862,8 +876,11 @@ export default function DiyMlpWorkspace({ profile }: Props) {
             </div>
           </article>
         </section>
+        ) : null}
       </div>
+      ) : null}
 
+      {activeTab === "predict" ? (
       <div className="dt-bottom-grid diy-bottom-grid">
         <article className="dt-panel">
           <div className="panel-title split">
@@ -941,7 +958,9 @@ export default function DiyMlpWorkspace({ profile }: Props) {
           ) : null}
         </article>
       </div>
+      ) : null}
 
+      {activeTab === "batch" ? (
       <article className="dt-panel diy-batch-panel">
         <div className="panel-title split">
           <span>
@@ -988,6 +1007,7 @@ export default function DiyMlpWorkspace({ profile }: Props) {
           </div>
         ) : <div className="empty-list">上传包含当前特征列的 CSV 后可批量预测。</div>}
       </article>
+      ) : null}
     </section>
   );
 }

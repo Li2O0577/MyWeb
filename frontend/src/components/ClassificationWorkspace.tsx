@@ -30,11 +30,14 @@ interface Props {
   profile: DataProfile;
 }
 
+type ClassificationTab = "train" | "result" | "predict" | "batch";
+
 interface ClassificationResult extends ApiJson {
   version_id?: string;
   acc?: number;
   cm?: number[][];
   label_names?: string[];
+  classification_report?: Record<string, unknown>;
   n_classes?: number;
   reverse_label_map?: Record<string, string>;
   train_losses?: number[];
@@ -227,6 +230,39 @@ function ConfusionMatrix({ matrix, labels }: { matrix?: number[][]; labels?: str
   );
 }
 
+function ClassificationReportTable({ report }: { report?: Record<string, unknown> }) {
+  const rows = Object.entries(report ?? {})
+    .filter(([, value]) => value && typeof value === "object")
+    .map(([label, value]) => ({ label, metrics: value as Record<string, unknown> }));
+  if (!rows.length) return <div className="empty-list">训练后显示 precision / recall / F1 分类报告。</div>;
+  return (
+    <div className="table-wrap compact-table report-table-wrap">
+      <table className="data-table report-table">
+        <thead>
+          <tr>
+            <th>类别</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
+            <th>Support</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, metrics }) => (
+            <tr key={label}>
+              <td>{label}</td>
+              <td>{formatNumber(metrics.precision)}</td>
+              <td>{formatNumber(metrics.recall)}</td>
+              <td>{formatNumber(metrics["f1-score"])}</td>
+              <td>{formatNumber(metrics.support, 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ProbabilityBars({ result }: { result: ApiJson | null }) {
   const probs = (result?.all_probs ?? []) as number[];
   const labels = (result?.label_names ?? []) as string[];
@@ -263,6 +299,7 @@ export default function ClassificationWorkspace({ profile }: Props) {
   const [batchLoading, setBatchLoading] = useState(false);
   const [error, setError] = useState("");
   const [batchError, setBatchError] = useState("");
+  const [activeTab, setActiveTab] = useState<ClassificationTab>("train");
 
   const targetProfile = profile.column_profiles.find((column) => column.name === targetCol);
   const nClasses = targetProfile?.unique_count ?? 0;
@@ -355,6 +392,7 @@ export default function ClassificationWorkspace({ profile }: Props) {
       });
       const normalized = normalizeClassificationResult(payload);
       setTrainResult(normalized);
+      setActiveTab("result");
       if (normalized?.version_id) {
         setSelectedVersion(normalized.version_id);
         setActiveVersion(normalized.version_id);
@@ -532,7 +570,16 @@ export default function ClassificationWorkspace({ profile }: Props) {
       {tooManyClasses ? <div className="inline-warning">目标列类别数过多，可能是 ID 或连续值；请改选真正的分类标签。</div> : null}
       {constantFeatures.length ? <div className="inline-warning">常量特征会影响训练：{constantFeatures.join("、")}。建议先到数据处理页移除。</div> : null}
 
-      <div className="dt-layout classification-layout">
+      <div className="workflow-tabbar" role="tablist" aria-label="分类功能分区">
+        <button className={activeTab === "train" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "train"} onClick={() => setActiveTab("train")}>训练配置</button>
+        <button className={activeTab === "result" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "result"} onClick={() => setActiveTab("result")}>结果分析</button>
+        <button className={activeTab === "predict" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "predict"} onClick={() => setActiveTab("predict")}>单条预测</button>
+        <button className={activeTab === "batch" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "batch"} onClick={() => setActiveTab("batch")}>批量预测</button>
+      </div>
+
+      {activeTab === "train" || activeTab === "result" ? (
+      <div className="dt-layout classification-layout single-pane">
+        {activeTab === "train" ? (
         <aside className="dt-config classification-config" aria-label="分类训练配置">
           <div className="panel-title split">
             <span>
@@ -611,7 +658,9 @@ export default function ClassificationWorkspace({ profile }: Props) {
             </button>
           </div>
         </aside>
+        ) : null}
 
+        {activeTab === "result" ? (
         <section className="dt-main" aria-label="分类训练结果">
           <article className="dt-panel">
             <div className="panel-title split">
@@ -643,6 +692,17 @@ export default function ClassificationWorkspace({ profile }: Props) {
           <article className="dt-panel">
             <div className="panel-title split">
               <span>
+                <ListChecks size={17} aria-hidden="true" />
+                <h2>分类报告</h2>
+              </span>
+              <small>precision / recall / F1</small>
+            </div>
+            <ClassificationReportTable report={trainResult?.classification_report} />
+          </article>
+
+          <article className="dt-panel">
+            <div className="panel-title split">
+              <span>
                 <LineChart size={17} aria-hidden="true" />
                 <h2>损失曲线</h2>
               </span>
@@ -651,8 +711,11 @@ export default function ClassificationWorkspace({ profile }: Props) {
             <LossChart train={trainResult?.train_losses} val={trainResult?.val_losses} />
           </article>
         </section>
+        ) : null}
       </div>
+      ) : null}
 
+      {activeTab === "predict" ? (
       <div className="dt-bottom-grid classification-bottom-grid">
         <article className="dt-panel">
           <div className="panel-title split">
@@ -718,7 +781,9 @@ export default function ClassificationWorkspace({ profile }: Props) {
           ) : null}
         </article>
       </div>
+      ) : null}
 
+      {activeTab === "batch" ? (
       <article className="dt-panel classification-batch-panel">
         <div className="panel-title split">
           <span>
@@ -765,6 +830,7 @@ export default function ClassificationWorkspace({ profile }: Props) {
           </div>
         ) : <div className="empty-list">上传包含当前特征列的 CSV 后可批量预测。</div>}
       </article>
+      ) : null}
     </section>
   );
 }

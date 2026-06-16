@@ -189,6 +189,16 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(predict_resp.status_code, 200, predict_resp.get_data(as_text=True))
         self.assertIn("pred_value", predict_resp.get_json())
 
+        batch_resp = self.client.post("/api/decision_tree/batch_predict", json={
+            "rows": [{"x1": 5, "x2": 10}, {"x1": 6, "x2": 12}],
+            "task_type": "regression",
+            "version_id": train_data["version_id"],
+        })
+        self.assertEqual(batch_resp.status_code, 200, batch_resp.get_data(as_text=True))
+        batch_data = batch_resp.get_json()
+        self.assertEqual(len(batch_data["predictions"]), 2)
+        self.assertIn("pred_value", batch_data["predictions"][0])
+
     def test_train_failure_returns_friendly_validation_error(self):
         rows = ["x,label,y"]
         for i in range(10):
@@ -212,6 +222,37 @@ class FlaskApiSmokeTests(unittest.TestCase):
         payload = train_resp.get_json()
         self.assertEqual(payload["error"]["code"], "INPUT_VALIDATION_FAILED")
         self.assertIn("过于接近样本数", payload["error"]["message"])
+
+    def test_decision_tree_classification_returns_report_for_react(self):
+        rows = ["x1,x2,label"]
+        for i in range(20):
+            rows.append(f"{i},{i + 1},low")
+        for i in range(20):
+            rows.append(f"{100 + i},{101 + i},high")
+
+        upload_resp = self._upload_csv("\n".join(rows), filename="tree_cls.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        train_resp = self.client.post("/api/decision_tree/train", json={
+            "session_id": sid,
+            "target_col": "label",
+            "feature_cols": ["x1", "x2"],
+            "task_type": "classification",
+            "criterion": "gini",
+            "max_depth": 3,
+        })
+        self.assertEqual(train_resp.status_code, 200, train_resp.get_data(as_text=True))
+        train_data = train_resp.get_json()
+        self.assertIn("classification_report", train_data)
+        self.assertIn("low", train_data["classification_report"])
+        self.assertIn("f1-score", train_data["classification_report"]["low"])
+
+        status_resp = self.client.get("/api/decision_tree/status")
+        self.assertEqual(status_resp.status_code, 200, status_resp.get_data(as_text=True))
+        status_data = status_resp.get_json()
+        self.assertIn("classification_report", status_data)
+        self.assertIn("high", status_data["classification_report"])
 
     def test_predict_without_model_returns_model_not_found(self):
         predict_resp = self.client.post("/api/regression/predict", json={
@@ -301,6 +342,56 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(processed["missing_total"], 0)
         self.assertTrue(any(col["name"] == "cat" and col["kind"] == "numeric" for col in processed["column_profiles"]))
 
+    def test_data_processing_history_undo_redo_and_pipeline(self):
+        upload_resp = self._upload_csv("x,y,cat\n1,10,a\n2,20,b\n3,30,a\n", filename="history.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        process_resp = self.client.post(f"/api/data/{sid}/process", json={
+            "operations": [
+                {"op": "drop_cols", "cols": ["cat"]},
+            ]
+        })
+        self.assertEqual(process_resp.status_code, 200, process_resp.get_data(as_text=True))
+        processed = process_resp.get_json()
+        self.assertNotIn("cat", processed["columns"])
+        self.assertTrue(processed["processing_history"]["can_undo"])
+        self.assertFalse(processed["processing_history"]["can_redo"])
+        self.assertEqual(len(processed["processing_history"]["history"]), 2)
+
+        undo_resp = self.client.post(f"/api/data/{sid}/undo", json={})
+        self.assertEqual(undo_resp.status_code, 200, undo_resp.get_data(as_text=True))
+        undone = undo_resp.get_json()
+        self.assertIn("cat", undone["columns"])
+        self.assertFalse(undone["processing_history"]["can_undo"])
+        self.assertTrue(undone["processing_history"]["can_redo"])
+
+        redo_resp = self.client.post(f"/api/data/{sid}/redo", json={})
+        self.assertEqual(redo_resp.status_code, 200, redo_resp.get_data(as_text=True))
+        redone = redo_resp.get_json()
+        self.assertNotIn("cat", redone["columns"])
+
+        save_resp = self.client.post(f"/api/data/{sid}/pipelines", json={"name": "删除类别列"})
+        self.assertEqual(save_resp.status_code, 200, save_resp.get_data(as_text=True))
+        pipeline = save_resp.get_json()["pipeline"]
+        self.assertEqual(pipeline["name"], "删除类别列")
+        self.assertEqual(pipeline["step_count"], 1)
+
+        upload_resp = self._upload_csv("x,y,cat\n1,10,a\n2,20,b\n", filename="pipeline_apply.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid2 = upload_resp.get_json()["session_id"]
+        save_direct = self.client.post(f"/api/data/{sid2}/pipelines", json={
+            "name": "direct",
+            "operations": [{"op": "drop_cols", "cols": ["cat"]}],
+        })
+        self.assertEqual(save_direct.status_code, 200, save_direct.get_data(as_text=True))
+        pipeline_id = save_direct.get_json()["pipeline"]["pipeline_id"]
+        apply_resp = self.client.post(f"/api/data/{sid2}/pipelines/{pipeline_id}/apply", json={})
+        self.assertEqual(apply_resp.status_code, 200, apply_resp.get_data(as_text=True))
+        applied = apply_resp.get_json()
+        self.assertNotIn("cat", applied["columns"])
+        self.assertTrue(applied["processing_history"]["can_undo"])
+
     def test_data_processing_rejects_unsafe_formula(self):
         upload_resp = self._upload_csv("x,y\n1,2\n3,4\n", filename="formula.csv")
         self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
@@ -360,12 +451,14 @@ class FlaskApiSmokeTests(unittest.TestCase):
             "x_col": "x",
             "y_col": "y",
             "color_col": "cat",
+            "hover_cols": ["cat", "z"],
         })
         self.assertEqual(scatter_resp.status_code, 200, scatter_resp.get_data(as_text=True))
         scatter = scatter_resp.get_json()
         self.assertEqual(scatter["chart_type"], "scatter")
         self.assertIn("points", scatter["data"])
         self.assertEqual(len(scatter["data"]["points"]), 5)
+        self.assertIn("hover", scatter["data"]["points"][0])
 
         bar_resp = self.client.post(f"/api/data/{sid}/visualize", json={
             "chart_type": "bar",
@@ -377,6 +470,28 @@ class FlaskApiSmokeTests(unittest.TestCase):
         bar = bar_resp.get_json()
         self.assertIn("bars", bar["data"])
         self.assertEqual(len(bar["data"]["bars"]), 3)
+
+        hist_resp = self.client.post(f"/api/data/{sid}/visualize", json={
+            "chart_type": "histogram",
+            "col": "y",
+            "group_col": "cat",
+            "bins": 4,
+        })
+        self.assertEqual(hist_resp.status_code, 200, hist_resp.get_data(as_text=True))
+        hist = hist_resp.get_json()
+        self.assertIn("bins", hist["data"])
+        self.assertTrue(any(item.get("group") == "a" for item in hist["data"]["bins"]))
+
+        violin_resp = self.client.post(f"/api/data/{sid}/visualize", json={
+            "chart_type": "violin",
+            "x_col": "cat",
+            "y_col": "y",
+        })
+        self.assertEqual(violin_resp.status_code, 200, violin_resp.get_data(as_text=True))
+        violin = violin_resp.get_json()
+        self.assertEqual(violin["chart_type"], "violin")
+        self.assertIn("groups", violin["data"])
+        self.assertTrue(all("values" in group for group in violin["data"]["groups"]))
 
         corr_resp = self.client.post(f"/api/data/{sid}/visualize", json={
             "chart_type": "corr_heatmap",
@@ -454,6 +569,10 @@ class FlaskApiSmokeTests(unittest.TestCase):
             "label_names": ["no", "yes"],
             "n_classes": 2,
             "reverse_label_map": {"0": "no", "1": "yes"},
+            "classification_report": {
+                "no": {"precision": 0.75, "recall": 0.75, "f1-score": 0.75, "support": 4},
+                "yes": {"precision": 0.75, "recall": 0.75, "f1-score": 0.75, "support": 4},
+            },
             "train_losses": [0.8, 0.6],
             "val_losses": [0.9, 0.7],
         }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
@@ -466,6 +585,7 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(status_data["cm"], [[3, 1], [1, 3]])
         self.assertEqual(status_data["label_names"], ["no", "yes"])
         self.assertEqual(status_data["reverse_label_map"], {"0": "no", "1": "yes"})
+        self.assertEqual(status_data["classification_report"]["no"]["f1-score"], 0.75)
         self.assertEqual(status_data["train_losses"], [0.8, 0.6])
 
     def test_diy_mlp_status_exposes_architecture_and_curves_for_react(self):
@@ -554,6 +674,14 @@ class FlaskApiSmokeTests(unittest.TestCase):
         })
         self.assertEqual(predict_resp.status_code, 200, predict_resp.get_data(as_text=True))
         self.assertIn("cluster", predict_resp.get_json())
+
+        batch_resp = self.client.post("/api/clustering/batch_predict", json={
+            "rows": [[3, 4], [104, 105]],
+            "version_id": train_data["version_id"],
+        })
+        self.assertEqual(batch_resp.status_code, 200, batch_resp.get_data(as_text=True))
+        batch_data = batch_resp.get_json()
+        self.assertEqual(len(batch_data["clusters"]), 2)
 
     def test_llm_direct_chat_streams_chunks_and_done(self):
         def fake_stream_chat(_api_base, _api_key, _model, _messages):

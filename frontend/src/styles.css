@@ -575,6 +575,10 @@ code {
   margin: 0 auto;
 }
 
+.workspace-wide {
+  max-width: 1380px;
+}
+
 .intro {
   text-align: center;
   margin-bottom: 28px;
@@ -1012,6 +1016,84 @@ h1 {
   margin-top: 0;
 }
 
+.processing-history-panel {
+  margin-top: 0;
+}
+
+.history-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.history-list,
+.pipeline-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.history-row,
+.pipeline-row {
+  border: 1px solid rgba(222, 214, 200, 0.76);
+  border-radius: var(--radius-md);
+  background: rgba(251, 248, 240, 0.72);
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.history-row.current {
+  border-color: rgba(164, 81, 42, 0.42);
+  background: rgba(164, 81, 42, 0.1);
+}
+
+.history-row strong,
+.history-row span,
+.history-row small,
+.pipeline-row strong,
+.pipeline-row span {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-row strong,
+.pipeline-row strong {
+  font-size: 13px;
+}
+
+.history-row span,
+.pipeline-row span,
+.history-row small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.history-index {
+  border: 1px solid rgba(222, 214, 200, 0.86);
+  border-radius: 999px;
+  background: var(--color-surface);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.pipeline-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipeline-row .button {
+  flex: 0 0 auto;
+  min-height: 32px;
+}
+
 .field-list {
   display: grid;
   gap: 8px;
@@ -1211,7 +1293,7 @@ h1 {
 
 .visual-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.42fr) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -1235,9 +1317,30 @@ h1 {
   gap: 12px;
 }
 
+.chart-actionbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chart-actionbar .button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.chart-action-status {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 160px;
+}
+
 .chart-type-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 6px;
 }
 
@@ -1334,14 +1437,29 @@ h1 {
   border: 1px solid rgba(222, 214, 200, 0.82);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  min-height: 430px;
+  min-height: 420px;
   overflow: hidden;
   display: grid;
-  align-content: start;
+  align-content: stretch;
+}
+
+.plotly-shell {
+  padding: 4px;
+}
+
+.plotly-canvas {
+  width: 100%;
+  min-height: 380px;
+}
+
+.plotly-canvas .js-plotly-plot,
+.plotly-canvas .plot-container,
+.plotly-canvas .svg-container {
+  width: 100% !important;
 }
 
 .chart-svg.rich {
-  height: 380px;
+  height: 410px;
   border: 0;
   border-radius: 0;
   background:
@@ -1360,6 +1478,32 @@ h1 {
 
 .chart-svg.rich text {
   font-size: 11px;
+  paint-order: stroke;
+  stroke: rgba(255, 253, 248, 0.74);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.chart-data-panel {
+  border: 1px solid rgba(222, 214, 200, 0.78);
+  border-radius: var(--radius-md);
+  background: rgba(251, 248, 240, 0.62);
+  overflow: hidden;
+}
+
+.chart-data-panel summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 650;
+  padding: 10px 12px;
+}
+
+.chart-data-table {
+  border-inline: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  max-height: 300px;
 }
 
 .heatmap-svg rect,
@@ -1459,6 +1603,7 @@ h1 {
 .form-field select,
 .form-field textarea {
   width: 100%;
+  min-width: 0;
   min-height: 36px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -1613,6 +1758,10 @@ h1 {
   align-items: start;
 }
 
+.dt-layout.single-pane {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .dt-config,
 .dt-panel {
   border: 1px solid var(--color-border);
@@ -1666,6 +1815,16 @@ h1 {
   overflow: auto;
 }
 
+.report-table-wrap {
+  max-height: 300px;
+}
+
+.report-table th:not(:first-child),
+.report-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .confusion-table {
   width: 100%;
   border-collapse: separate;
@@ -1702,7 +1861,7 @@ h1 {
 
 .dt-bottom-grid {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  grid-template-columns: repeat(2, minmax(360px, 1fr));
   gap: 12px;
   align-items: start;
 }
@@ -1903,7 +2062,98 @@ h1 {
 }
 
 .diy-layout {
-  grid-template-columns: minmax(360px, 0.46fr) minmax(0, 1fr);
+  grid-template-columns: minmax(380px, 440px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.diy-layout.single-pane {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.diy-tabbar {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 253, 248, 0.72);
+  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.workflow-tabbar {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 253, 248, 0.72);
+  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.workflow-tabbar.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diy-tab {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  min-height: 34px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.workflow-tab {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  min-height: 34px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.diy-tab:hover {
+  background: rgba(255, 253, 248, 0.86);
+  color: var(--color-text);
+}
+
+.workflow-tab:hover {
+  background: rgba(255, 253, 248, 0.86);
+  color: var(--color-text);
+}
+
+.diy-tab:focus-visible {
+  outline: 3px solid rgba(164, 81, 42, 0.24);
+  outline-offset: 2px;
+}
+
+.workflow-tab:focus-visible {
+  outline: 3px solid rgba(164, 81, 42, 0.24);
+  outline-offset: 2px;
+}
+
+.diy-tab.active {
+  background: var(--color-surface);
+  color: var(--color-accent);
+  box-shadow: 0 6px 18px rgba(54, 45, 30, 0.06);
+}
+
+.workflow-tab.active {
+  background: var(--color-surface);
+  color: var(--color-accent);
+  box-shadow: 0 6px 18px rgba(54, 45, 30, 0.06);
 }
 
 .diy-config {
@@ -1926,13 +2176,41 @@ h1 {
 
 .layer-row {
   display: grid;
-  grid-template-columns: minmax(82px, 0.7fr) minmax(118px, 1fr) minmax(126px, 1fr) 58px 34px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: end;
   padding: 8px;
   border: 1px solid rgba(62, 54, 45, 0.09);
   border-radius: var(--radius-sm);
   background: rgba(255, 253, 248, 0.72);
+}
+
+.layer-row .check-field,
+.layer-row .danger-icon {
+  align-self: center;
+}
+
+.layer-row .danger-icon {
+  justify-self: end;
+}
+
+.diy-bottom-grid {
+  grid-template-columns: repeat(2, minmax(360px, 1fr));
+}
+
+.diy-batch-panel {
+  min-width: 0;
+}
+
+.diy-batch-panel .table-wrap,
+.tree-batch-panel .table-wrap,
+.cluster-batch-panel .table-wrap {
+  max-height: 360px;
+}
+
+.tree-batch-panel,
+.cluster-batch-panel {
+  min-width: 0;
 }
 
 .check-field {
@@ -2624,6 +2902,7 @@ h1 {
   .visual-layout,
   .visual-grid,
   .operation-grid,
+  .history-layout,
   .dt-layout,
   .dt-bottom-grid,
   .model-workbench-grid,
@@ -2751,6 +3030,8 @@ h1 {
   .operation-columns.two,
   .operation-columns.three,
   .operation-columns.four,
+  .diy-tabbar,
+  .workflow-tabbar,
   .visual-toolbar,
   .visual-control-grid,
   .dt-toolbar,

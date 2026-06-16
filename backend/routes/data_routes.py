@@ -11,13 +11,31 @@ from services.data_service import (
     apply_processing_operations,
 )
 from services.visualization_service import build_visualization_payload
-from session_store import create_session, get_session, get_session_meta, update_session
+from session_store import (
+    create_session,
+    get_pipeline,
+    get_session,
+    get_session_meta,
+    processing_history,
+    redo_session,
+    save_pipeline,
+    undo_session,
+    update_session,
+)
 
 data_bp = Blueprint("data", __name__)
 _log = logging.getLogger(__name__)
 
 
 MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
+
+
+def _profile_response(df, sid, extra=None):
+    profile = build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid))
+    profile["processing_history"] = processing_history(sid)
+    if extra:
+        profile.update(extra)
+    return profile
 
 @data_bp.route("/upload", methods=["POST"])
 def upload():
@@ -44,8 +62,7 @@ def upload():
             )
         df = parse_file(file_bytes, file.filename)
         sid = create_session(df, source_name=file.filename)
-        meta = get_session_meta(sid)
-        return jsonify(build_data_profile(df, session_id=sid, session_meta=meta))
+        return jsonify(_profile_response(df, sid))
     except Exception:
         _log.exception("Failed to parse uploaded file")
         return api_error(
@@ -86,11 +103,13 @@ def process_data(sid):
             str(exc) or "请检查选择的列、行号、目标类型或表达式是否有效。",
         )
 
-    update_session(sid, df)
+    update_session(sid, df, history_entry={
+        "label": messages[0] if messages else "数据处理",
+        "operations": ops,
+        "messages": messages,
+    })
 
-    profile = build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid))
-    profile["operations_applied"] = messages
-    return jsonify(profile)
+    return jsonify(_profile_response(df, sid, {"operations_applied": messages}))
 
 
 @data_bp.route("/<sid>/profile", methods=["GET"])
@@ -99,7 +118,82 @@ def get_profile(sid):
     df = get_session(sid)
     if df is None:
         return session_expired()
-    return jsonify(build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid)))
+    return jsonify(_profile_response(df, sid))
+
+
+@data_bp.route("/<sid>/history", methods=["GET"])
+def get_processing_history(sid):
+    """Return processing history, undo/redo state, and saved pipelines."""
+    if get_session(sid) is None:
+        return session_expired()
+    return jsonify(processing_history(sid))
+
+
+@data_bp.route("/<sid>/undo", methods=["POST"])
+def undo_processing(sid):
+    """Restore the previous processing snapshot for this session."""
+    df = undo_session(sid)
+    if df is None:
+        if get_session(sid) is None:
+            return session_expired()
+        return api_error("UNDO_NOT_AVAILABLE", "当前没有可撤销的数据处理步骤", 400)
+    return jsonify(_profile_response(df, sid, {"operations_applied": ["已撤销上一步处理"]}))
+
+
+@data_bp.route("/<sid>/redo", methods=["POST"])
+def redo_processing(sid):
+    """Restore the next processing snapshot for this session."""
+    df = redo_session(sid)
+    if df is None:
+        if get_session(sid) is None:
+            return session_expired()
+        return api_error("REDO_NOT_AVAILABLE", "当前没有可重做的数据处理步骤", 400)
+    return jsonify(_profile_response(df, sid, {"operations_applied": ["已重做下一步处理"]}))
+
+
+@data_bp.route("/<sid>/pipelines", methods=["POST"])
+def save_processing_pipeline(sid):
+    """Save current processing history or supplied operations as a reusable pipeline."""
+    if get_session(sid) is None:
+        return session_expired()
+    data = request.json or {}
+    pipeline = save_pipeline(sid, name=data.get("name"), operations=data.get("operations"))
+    if pipeline is None:
+        return api_error(
+            "PIPELINE_EMPTY",
+            "当前没有可保存的数据处理流水线",
+            400,
+            "请先执行至少一步数据处理，或提交 operations 字段。",
+        )
+    return jsonify({"pipeline": pipeline, "processing_history": processing_history(sid)})
+
+
+@data_bp.route("/<sid>/pipelines/<pipeline_id>/apply", methods=["POST"])
+def apply_processing_pipeline(sid, pipeline_id):
+    """Apply a saved processing pipeline to the current session data."""
+    df = get_session(sid)
+    if df is None:
+        return session_expired()
+    pipeline = get_pipeline(sid, pipeline_id)
+    if pipeline is None:
+        return api_error("PIPELINE_NOT_FOUND", "没有找到对应的数据处理流水线", 404)
+    operations = pipeline.get("operations") or []
+    try:
+        df, messages = apply_processing_operations(df, operations)
+    except Exception as exc:
+        _log.exception("Failed to apply processing pipeline")
+        return api_error(
+            "PIPELINE_APPLY_FAILED",
+            "数据处理流水线执行失败",
+            400,
+            str(exc) or "请检查流水线中的列名、表达式或数据类型是否仍然适用于当前数据。",
+        )
+    update_session(sid, df, history_entry={
+        "label": f"应用流水线：{pipeline.get('name') or pipeline_id}",
+        "operations": operations,
+        "messages": messages,
+    })
+    return jsonify(_profile_response(df, sid, {"operations_applied": messages}))
 
 
 @data_bp.route("/<sid>/summary", methods=["GET"])

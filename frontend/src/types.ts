@@ -54,6 +54,33 @@ export interface DataProfile {
   column_profiles: ColumnProfile[];
   preview: Array<Record<string, unknown>>;
   summary: string;
+  processing_history?: ProcessingHistory;
+}
+
+export interface ProcessingHistoryEntry {
+  state_id: string;
+  label: string;
+  operations: Array<Record<string, unknown>>;
+  messages: string[];
+  created_at: number;
+  n_rows: number;
+  n_cols: number;
+}
+
+export interface ProcessingPipeline {
+  pipeline_id: string;
+  name: string;
+  operations: Array<Record<string, unknown>>;
+  created_at: number;
+  step_count: number;
+}
+
+export interface ProcessingHistory {
+  history: ProcessingHistoryEntry[];
+  current_index: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  pipelines: ProcessingPipeline[];
 }
 
 export interface HealthResponse {

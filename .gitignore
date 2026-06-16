@@ -72,9 +72,11 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/.tsbuild/
 *.tsbuildinfo
 frontend/*.tsbuildinfo
 frontend/vite.config.d.ts
+frontend/vite.config.js
 
 # 后端 session 临时数据
 backend/sessions/

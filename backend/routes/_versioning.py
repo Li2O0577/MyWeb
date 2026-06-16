@@ -48,6 +48,7 @@ def setup_version_routes(bp, model_type):
             "label_names": meta.get("label_names", []),
             "n_classes": meta.get("n_classes"),
             "reverse_label_map": meta.get("reverse_label_map", {}),
+            "classification_report": meta.get("classification_report", {}),
             "created_at": meta.get("created_at", ""),
             "dataset_name": meta.get("dataset_name", ""),
             "session_id": meta.get("session_id", ""),

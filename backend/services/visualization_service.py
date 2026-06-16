@@ -151,8 +151,10 @@ def _sample(df, max_points=MAX_POINTS):
     return df.sample(n=max_points, random_state=7).sort_index()
 
 
-def _xy_records(df, x_col, y_col, color_col=None, size_col=None, z_col=None):
-    cols = [col for col in [x_col, y_col, color_col, size_col, z_col] if col is not None]
+def _xy_records(df, x_col, y_col, color_col=None, size_col=None, z_col=None, hover_cols=None):
+    hover_cols = hover_cols or []
+    cols = [col for col in [x_col, y_col, color_col, size_col, z_col, *hover_cols] if col is not None]
+    cols = list(dict.fromkeys(cols))
     sample = _sample(df[cols].dropna(subset=[x_col, y_col]))
     records = []
     for _, row in sample.iterrows():
@@ -163,6 +165,8 @@ def _xy_records(df, x_col, y_col, color_col=None, size_col=None, z_col=None):
             item["color"] = str(_json_value(row[color_col]))
         if size_col is not None:
             item["size"] = _json_value(row[size_col])
+        if hover_cols:
+            item["hover"] = {str(col): _json_value(row[col]) for col in hover_cols if col in row}
         records.append(item)
     return records, len(sample)
 
@@ -223,31 +227,34 @@ def _histogram_data(df, col, bins=40, group_col=None, cumulative=False, norm="co
     bins = max(5, min(int(bins), 200))
     if values.empty:
         return {"bins": []}
-    counts, edges = np.histogram(values, bins=bins)
-    if cumulative:
-        counts = np.cumsum(counts)
-    if norm == "percent":
-        counts = counts / max(counts.sum(), 1) * 100
-    elif norm == "probability":
-        counts = counts / max(counts.sum(), 1)
-    elif norm == "density":
-        counts, edges = np.histogram(values, bins=bins, density=True)
+    _, edges = np.histogram(values, bins=bins)
+    grouped = [(None, df)] if group_col is None else list(df.groupby(group_col, dropna=False))[:GROUP_MAX_USEFUL_CATEGORIES]
+    result = []
+    for group_value, group_df in grouped:
+        group_values = pd.to_numeric(group_df[col], errors="coerce").dropna()
+        if group_values.empty:
+            continue
+        counts, _ = np.histogram(group_values, bins=edges, density=(norm == "density"))
         if cumulative:
             counts = np.cumsum(counts)
-    result = []
-    for i, count in enumerate(counts):
-        start = float(edges[i])
-        end = float(edges[i + 1])
-        result.append({
-            "label": f"{start:.2f}-{end:.2f}",
-            "start": start,
-            "end": end,
-            "count": float(count),
-        })
+        if norm == "percent":
+            counts = counts / max(counts.sum(), 1) * 100
+        elif norm == "probability":
+            counts = counts / max(counts.sum(), 1)
+        for i, count in enumerate(counts):
+            start = float(edges[i])
+            end = float(edges[i + 1])
+            result.append({
+                "label": f"{start:.2f}-{end:.2f}",
+                "start": start,
+                "end": end,
+                "count": float(count),
+                "group": str(_json_value(group_value)) if group_value is not None else None,
+            })
     return {"bins": result, "x_label": str(col), "group_col": str(group_col) if group_col else None}
 
 
-def _box_groups(df, y_col, x_col=None, max_groups=30):
+def _box_groups(df, y_col, x_col=None, max_groups=30, max_values_per_group=1500):
     groups = [(None, df)] if x_col is None else list(df.groupby(x_col, dropna=False))[:max_groups]
     output = []
     for label, group_df in groups:
@@ -262,6 +269,9 @@ def _box_groups(df, y_col, x_col=None, max_groups=30):
         upper = min(float(values.max()), q3 + 1.5 * iqr)
         outliers = values[(values < lower) | (values > upper)].head(60).tolist()
         hist_counts, hist_edges = np.histogram(values, bins=min(20, max(5, int(np.sqrt(len(values))))))
+        raw_values = values
+        if len(raw_values) > max_values_per_group:
+            raw_values = raw_values.sample(n=max_values_per_group, random_state=7).sort_index()
         output.append({
             "label": str(_json_value(label)) if label is not None else str(y_col),
             "q1": q1,
@@ -270,6 +280,7 @@ def _box_groups(df, y_col, x_col=None, max_groups=30):
             "lower": lower,
             "upper": upper,
             "outliers": [_json_value(v) for v in outliers],
+            "values": [_json_value(v) for v in raw_values.tolist()],
             "density": [
                 {"start": float(hist_edges[i]), "end": float(hist_edges[i + 1]), "count": int(hist_counts[i])}
                 for i in range(len(hist_counts))
@@ -355,10 +366,11 @@ def build_visualization_payload(df, config):
         y_col = _resolve_column(df, config.get("y_col") or (numeric_cols[1] if len(numeric_cols) > 1 else x_col))
         color_col = _resolve_column(df, config.get("color_col"), required=False)
         size_col = _resolve_column(df, config.get("size_col"), required=False)
+        hover_cols = _resolve_columns(df, config.get("hover_cols") or [])
         warnings.extend(_common_large_point_warnings(df, "散点图", color_col, size_col))
         if x_col == y_col:
             warnings.append(_warning("warning", "X/Y 轴相同", f"「{x_col}」同时用于 X 和 Y，散点会退化为对角线。"))
-        points, sampled = _xy_records(df, x_col, y_col, color_col, size_col)
+        points, sampled = _xy_records(df, x_col, y_col, color_col, size_col, hover_cols=hover_cols)
         data = {"points": points, "x_label": str(x_col), "y_label": str(y_col), "sampled_rows": sampled}
 
     elif chart_type in {"line", "area"}:
@@ -440,10 +452,11 @@ def build_visualization_payload(df, config):
         z_col = _resolve_column(df, config.get("z_col") or numeric_cols[2])
         color_col = _resolve_column(df, config.get("color_col"), required=False)
         size_col = _resolve_column(df, config.get("size_col"), required=False)
+        hover_cols = _resolve_columns(df, config.get("hover_cols") or [])
         if len({x_col, y_col, z_col}) < 3:
             raise ValueError("3D 散点图的 X/Y/Z 轴不能重复。")
         warnings.extend(_common_large_point_warnings(df, "3D 散点图", color_col, size_col))
-        points, sampled = _xy_records(df, x_col, y_col, color_col, size_col, z_col)
+        points, sampled = _xy_records(df, x_col, y_col, color_col, size_col, z_col, hover_cols)
         data = {"points": points, "x_label": str(x_col), "y_label": str(y_col), "z_label": str(z_col), "sampled_rows": sampled}
 
     else:

@@ -399,7 +399,10 @@ function App() {
           </div>
         </header>
 
-        <section className="workspace" aria-labelledby="workspace-title">
+        <section
+          className={["process", "visualize", "model", "llm"].includes(activeView) ? "workspace workspace-wide" : "workspace"}
+          aria-labelledby="workspace-title"
+        >
           <div className="intro">
             <div className="eyebrow">
               <Wand2 size={15} aria-hidden="true" />

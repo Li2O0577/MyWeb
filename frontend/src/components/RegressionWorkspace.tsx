@@ -29,6 +29,8 @@ interface Props {
   profile: DataProfile;
 }
 
+type RegressionTab = "train" | "result" | "predict" | "batch";
+
 interface RegressionResult extends ApiJson {
   version_id?: string;
   r2?: number;
@@ -211,6 +213,7 @@ export default function RegressionWorkspace({ profile }: Props) {
   const [batchLoading, setBatchLoading] = useState(false);
   const [error, setError] = useState("");
   const [batchError, setBatchError] = useState("");
+  const [activeTab, setActiveTab] = useState<RegressionTab>("train");
 
   const targetProfile = profile.column_profiles.find((column) => column.name === targetCol);
   const cleanRows = cleanRowsEstimate(profile, [...featureCols, targetCol].filter(Boolean));
@@ -301,6 +304,7 @@ export default function RegressionWorkspace({ profile }: Props) {
       });
       const normalized = normalizeRegressionResult(payload);
       setTrainResult(normalized);
+      setActiveTab("result");
       if (normalized?.version_id) {
         setSelectedVersion(normalized.version_id);
         setActiveVersion(normalized.version_id);
@@ -468,7 +472,16 @@ export default function RegressionWorkspace({ profile }: Props) {
       {cleanRows < 10 && featureCols.length ? <div className="inline-warning">回归训练至少需要 10 行无缺失的数值数据。</div> : null}
       {constantFeatures.length ? <div className="inline-warning">常量特征会影响训练：{constantFeatures.join("、")}。建议先到数据处理页移除。</div> : null}
 
-      <div className="dt-layout regression-layout">
+      <div className="workflow-tabbar" role="tablist" aria-label="回归功能分区">
+        <button className={activeTab === "train" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "train"} onClick={() => setActiveTab("train")}>训练配置</button>
+        <button className={activeTab === "result" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "result"} onClick={() => setActiveTab("result")}>结果分析</button>
+        <button className={activeTab === "predict" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "predict"} onClick={() => setActiveTab("predict")}>单条预测</button>
+        <button className={activeTab === "batch" ? "workflow-tab active" : "workflow-tab"} type="button" role="tab" aria-selected={activeTab === "batch"} onClick={() => setActiveTab("batch")}>批量预测</button>
+      </div>
+
+      {activeTab === "train" || activeTab === "result" ? (
+      <div className="dt-layout regression-layout single-pane">
+        {activeTab === "train" ? (
         <aside className="dt-config regression-config" aria-label="回归训练配置">
           <div className="panel-title split">
             <span>
@@ -547,7 +560,9 @@ export default function RegressionWorkspace({ profile }: Props) {
             </button>
           </div>
         </aside>
+        ) : null}
 
+        {activeTab === "result" ? (
         <section className="dt-main" aria-label="回归训练结果">
           <article className="dt-panel">
             <div className="panel-title split">
@@ -592,8 +607,11 @@ export default function RegressionWorkspace({ profile }: Props) {
             </div>
           </article>
         </section>
+        ) : null}
       </div>
+      ) : null}
 
+      {activeTab === "predict" ? (
       <div className="dt-bottom-grid regression-bottom-grid">
         <article className="dt-panel">
           <div className="panel-title split">
@@ -658,7 +676,9 @@ export default function RegressionWorkspace({ profile }: Props) {
           ) : null}
         </article>
       </div>
+      ) : null}
 
+      {activeTab === "batch" ? (
       <article className="dt-panel regression-batch-panel">
         <div className="panel-title split">
           <span>
@@ -703,6 +723,7 @@ export default function RegressionWorkspace({ profile }: Props) {
           </div>
         ) : <div className="empty-list">上传包含当前特征列的 CSV 后可批量预测。</div>}
       </article>
+      ) : null}
     </section>
   );
 }

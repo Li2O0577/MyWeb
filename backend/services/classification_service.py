@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 from torch.utils.data import TensorDataset, DataLoader
 
 from models.registry import (
@@ -145,6 +145,14 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
     cm = confusion_matrix(y_test, y_pred).tolist()
     unique_test_labels = sorted(set(int(y) for y in y_test) | set(int(y) for y in y_pred))
     label_names = [str(reverse_label_map.get(l, l)) for l in unique_test_labels]
+    report = classification_report(
+        y_test,
+        y_pred,
+        labels=unique_test_labels,
+        target_names=label_names,
+        output_dict=True,
+        zero_division=0,
+    )
 
     # Persist as version
     version_id = generate_version_id()
@@ -183,6 +191,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
         "label_names": label_names,
         "n_classes": n_classes,
         "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()},
+        "classification_report": report,
         "train_losses": train_losses,
         "val_losses": val_losses,
     }, {"model": "model.pth", "scaler": "scaler.npz", "config": "config.json"})
@@ -194,6 +203,7 @@ def train(df, target_col, feature_cols, hidden1, hidden2, dropout_rate,
         "acc": acc, "cm": cm, "label_names": label_names,
         "n_classes": n_classes,
         "reverse_label_map": {str(k): str(v) for k, v in reverse_label_map.items()},
+        "classification_report": report,
         "train_losses": train_losses, "val_losses": val_losses,
         "version_id": version_id
     }, None

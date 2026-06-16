@@ -172,3 +172,30 @@ def predict_one(feature_values, version_id=None):
     input_scaled = scaler.transform(input_arr)
     pred = int(model.predict(input_scaled)[0])
     return {"cluster": pred}, None
+
+
+def predict_batch(rows, version_id=None):
+    """Predict clusters for many rows (K-means only)."""
+    if len(rows) > 10000:
+        return None, f"单次预测最多支持 10000 行，当前请求 {len(rows)} 行。请分批预测。"
+
+    paths, meta = get_model_paths("clustering", version_id)
+    if not paths:
+        return None, "没有找到已保存的聚类模型，请先训练模型或切换到有效版本。"
+
+    with open(paths["config"], 'r') as f:
+        config = json.load(f)
+    if config.get("algorithm") != "kmeans":
+        return None, "Only K-means supports prediction."
+
+    model_path = paths.get("model", "")
+    if model_path.endswith(".npz"):
+        model = load_kmeans(model_path)
+    else:
+        model = safe_load_pickle(model_path, KMeans)
+    scaler = load_scaler(paths["scaler"])
+
+    input_arr = np.array(rows)
+    input_scaled = scaler.transform(input_arr)
+    preds = model.predict(input_scaled).astype(int).tolist()
+    return {"clusters": preds}, None

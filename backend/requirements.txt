@@ -16,5 +16,4 @@ matplotlib>=3.7
 #   CPU only:     pip install torch
 #   CUDA 11.8:    pip install torch --index-url https://download.pytorch.org/whl/cu118
 #   CUDA 12.1:    pip install torch --index-url https://download.pytorch.org/whl/cu121
-#   Or use setup.ps1 which auto-detects your GPU.
 torch>=2.0
