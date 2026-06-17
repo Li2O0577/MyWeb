@@ -4,6 +4,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -102,33 +104,54 @@ class FlaskApiSmokeTests(unittest.TestCase):
             sys.path.insert(0, backend_dir)
 
         import app as backend_app
+        import auth_store
         import models.registry as registry
         import session_store
+        import task_store
 
         cls.backend_app = backend_app
+        cls.auth_store = auth_store
         cls.registry = registry
         cls.session_store = session_store
+        cls.task_store = task_store
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="myweb1_api_test_")
         self.sessions_dir = os.path.join(self.tmpdir, "sessions")
         self.models_dir = os.path.join(self.tmpdir, "models")
+        self.auth_dir = os.path.join(self.tmpdir, "auth")
         os.makedirs(self.sessions_dir, exist_ok=True)
         os.makedirs(self.models_dir, exist_ok=True)
+        os.makedirs(self.auth_dir, exist_ok=True)
 
+        self.old_auth_dir = self.auth_store.AUTH_DIR
+        self.old_users_path = self.auth_store.USERS_PATH
         self.old_sessions_dir = self.session_store.SESSIONS_DIR
         self.old_models_dir = self.registry.MODELS_DIR
         self.old_registry_path = self.registry.REGISTRY_PATH
 
+        self.auth_store.AUTH_DIR = self.auth_dir
+        self.auth_store.USERS_PATH = os.path.join(self.auth_dir, "users.json")
         self.session_store.SESSIONS_DIR = self.sessions_dir
         self.registry.MODELS_DIR = self.models_dir
         self.registry.REGISTRY_PATH = os.path.join(self.models_dir, "registry.json")
+        self.auth_store.clear_auth_state()
         self.session_store._sessions.clear()
+        self.task_store.clear_tasks()
 
         self.client = self.backend_app.app.test_client()
+        user, err = self.auth_store.create_user("tester", "password123")
+        self.assertIsNone(err)
+        self.user = user
+        token = self.auth_store.create_session(user)
+        self.client.set_cookie(self.auth_store.COOKIE_NAME, token)
 
     def tearDown(self):
+        self.auth_store.clear_auth_state()
         self.session_store._sessions.clear()
+        self.task_store.clear_tasks()
+        self.auth_store.AUTH_DIR = self.old_auth_dir
+        self.auth_store.USERS_PATH = self.old_users_path
         self.session_store.SESSIONS_DIR = self.old_sessions_dir
         self.registry.MODELS_DIR = self.old_models_dir
         self.registry.REGISTRY_PATH = self.old_registry_path
@@ -148,6 +171,87 @@ class FlaskApiSmokeTests(unittest.TestCase):
                 continue
             events.append(json.loads(block[6:]))
         return events
+
+    def _wait_for_task(self, task_id, timeout=5.0):
+        deadline = time.time() + timeout
+        payload = None
+        while time.time() < deadline:
+            resp = self.client.get(f"/api/tasks/{task_id}")
+            self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+            payload = resp.get_json()
+            if payload["status"] in {"succeeded", "failed", "cancelled"}:
+                return payload
+            time.sleep(0.05)
+        self.fail(f"Task {task_id} did not finish in {timeout} seconds; last={payload}")
+
+    def _make_authed_client(self, username, password="password123"):
+        client = self.backend_app.app.test_client()
+        user, err = self.auth_store.create_user(username, password)
+        self.assertIsNone(err)
+        token = self.auth_store.create_session(user)
+        client.set_cookie(self.auth_store.COOKIE_NAME, token)
+        return client, user
+
+    def test_auth_required_and_sessions_are_user_scoped(self):
+        anon = self.backend_app.app.test_client()
+        health_resp = anon.get("/api/health")
+        self.assertEqual(health_resp.status_code, 401)
+
+        upload_resp = self._upload_csv("x,y\n1,2\n3,4\n", filename="private.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        other_client, _other_user = self._make_authed_client("other_user")
+        profile_resp = other_client.get(f"/api/data/{sid}/profile")
+        self.assertEqual(profile_resp.status_code, 404)
+        self.assertEqual(profile_resp.get_json()["error"]["code"], "SESSION_EXPIRED")
+
+        own_profile_resp = self.client.get(f"/api/data/{sid}/profile")
+        self.assertEqual(own_profile_resp.status_code, 200, own_profile_resp.get_data(as_text=True))
+        self.assertEqual(own_profile_resp.get_json()["session_id"], sid)
+
+    def test_task_queue_cancel_and_task_visibility_are_user_scoped(self):
+        gate = threading.Event()
+        first = self.task_store.create_task(
+            "training",
+            "long task",
+            metadata={"user_id": self.user["user_id"], "model_type": "regression"},
+        )
+        self.task_store.submit_task(first, lambda: (gate.wait(2.0), {"version_id": "done"})[1])
+
+        deadline = time.time() + 2.0
+        first_payload = None
+        while time.time() < deadline:
+            first_resp = self.client.get(f"/api/tasks/{first}")
+            self.assertEqual(first_resp.status_code, 200, first_resp.get_data(as_text=True))
+            first_payload = first_resp.get_json()
+            if first_payload["status"] == "running":
+                break
+            time.sleep(0.02)
+        self.assertEqual(first_payload["status"], "running", first_payload)
+
+        second = self.task_store.create_task(
+            "training",
+            "queued task",
+            metadata={"user_id": self.user["user_id"], "model_type": "classification"},
+        )
+        self.task_store.submit_task(second, lambda: {"version_id": "should-not-run"})
+
+        second_resp = self.client.get(f"/api/tasks/{second}")
+        self.assertEqual(second_resp.status_code, 200, second_resp.get_data(as_text=True))
+        self.assertEqual(second_resp.get_json()["status"], "queued")
+
+        cancel_resp = self.client.post(f"/api/tasks/{second}/cancel")
+        self.assertEqual(cancel_resp.status_code, 200, cancel_resp.get_data(as_text=True))
+        self.assertEqual(cancel_resp.get_json()["status"], "cancelled")
+
+        other_client, _other_user = self._make_authed_client("task_other")
+        hidden_resp = other_client.get(f"/api/tasks/{first}")
+        self.assertEqual(hidden_resp.status_code, 404)
+
+        gate.set()
+        first_done = self._wait_for_task(first)
+        self.assertEqual(first_done["status"], "succeeded", first_done)
 
     def test_upload_train_predict_decision_tree_regression(self):
         rows = ["x1,x2,y"]
@@ -169,9 +273,23 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(train_resp.status_code, 200, train_resp.get_data(as_text=True))
         train_data = train_resp.get_json()
         self.assertIn("version_id", train_data)
+        self.assertIn("task_id", train_data)
         self.assertIn("r2", train_data)
         self.assertIn("tree_rules", train_data)
         self.assertIn("tree_nodes", train_data)
+
+        tasks_resp = self.client.get("/api/tasks")
+        self.assertEqual(tasks_resp.status_code, 200, tasks_resp.get_data(as_text=True))
+        tasks = tasks_resp.get_json()["tasks"]
+        task = next(item for item in tasks if item["task_id"] == train_data["task_id"])
+        self.assertEqual(task["kind"], "training")
+        self.assertEqual(task["status"], "succeeded")
+        self.assertEqual(task["metadata"]["model_type"], "decision_tree")
+        self.assertEqual(task["result"]["version_id"], train_data["version_id"])
+
+        task_resp = self.client.get(f"/api/tasks/{train_data['task_id']}")
+        self.assertEqual(task_resp.status_code, 200, task_resp.get_data(as_text=True))
+        self.assertEqual(task_resp.get_json()["task_id"], train_data["task_id"])
 
         status_resp = self.client.get("/api/decision_tree/status")
         self.assertEqual(status_resp.status_code, 200, status_resp.get_data(as_text=True))
@@ -253,6 +371,40 @@ class FlaskApiSmokeTests(unittest.TestCase):
         status_data = status_resp.get_json()
         self.assertIn("classification_report", status_data)
         self.assertIn("high", status_data["classification_report"])
+
+    def test_decision_tree_train_supports_async_task_result(self):
+        rows = ["x1,x2,y"]
+        for i in range(24):
+            rows.append(f"{i},{i * 2},{i * 3}")
+
+        upload_resp = self._upload_csv("\n".join(rows), filename="tree_async.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        train_resp = self.client.post("/api/decision_tree/train?async=1", json={
+            "session_id": sid,
+            "target_col": "y",
+            "feature_cols": ["x1", "x2"],
+            "task_type": "regression",
+            "criterion": "squared_error",
+            "max_depth": 3,
+        })
+        self.assertEqual(train_resp.status_code, 202, train_resp.get_data(as_text=True))
+        train_data = train_resp.get_json()
+        self.assertTrue(train_data["async"])
+        task_id = train_data["task_id"]
+
+        task = self._wait_for_task(task_id)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertEqual(task["metadata"]["model_type"], "decision_tree")
+        self.assertIn("version_id", task["result"])
+        self.assertIn("result_payload", task)
+        self.assertEqual(task["result_payload"]["task_id"], task_id)
+        self.assertIn("tree_nodes", task["result_payload"])
+
+        status_resp = self.client.get("/api/decision_tree/status")
+        self.assertEqual(status_resp.status_code, 200, status_resp.get_data(as_text=True))
+        self.assertEqual(status_resp.get_json()["version_id"], task["result"]["version_id"])
 
     def test_predict_without_model_returns_model_not_found(self):
         predict_resp = self.client.post("/api/regression/predict", json={
@@ -416,6 +568,12 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
         sid = upload_resp.get_json()["session_id"]
 
+        outlier_resp = self.client.get(f"/api/data/{sid}/outliers?coefficient=3")
+        self.assertEqual(outlier_resp.status_code, 200, outlier_resp.get_data(as_text=True))
+        outlier_data = outlier_resp.get_json()
+        self.assertEqual(outlier_data["coefficient"], 3.0)
+        self.assertIn("x", outlier_data["outliers"])
+
         winsor_resp = self.client.post(f"/api/data/{sid}/process", json={
             "operations": [
                 {"op": "winsorize_outliers", "cols": ["x"], "coefficient": 1.5},
@@ -538,6 +696,7 @@ class FlaskApiSmokeTests(unittest.TestCase):
 
     def test_regression_status_exposes_training_curves_for_react(self):
         self.registry.register_version("regression", "reg_test_v1", {
+            "user_id": self.user["user_id"],
             "dataset_name": "unit.csv",
             "session_id": "sid-test",
             "features": ["x1", "x2"],
@@ -559,6 +718,7 @@ class FlaskApiSmokeTests(unittest.TestCase):
 
     def test_classification_status_exposes_result_panels_for_react(self):
         self.registry.register_version("classification", "cls_test_v1", {
+            "user_id": self.user["user_id"],
             "dataset_name": "unit.csv",
             "session_id": "sid-cls",
             "features": ["x1", "x2"],
@@ -594,6 +754,7 @@ class FlaskApiSmokeTests(unittest.TestCase):
             {"neurons": 8, "activation": "GELU", "bn": False, "dropout": 0.2},
         ]
         self.registry.register_version("diy_mlp", "diy_test_v1", {
+            "user_id": self.user["user_id"],
             "dataset_name": "unit.csv",
             "session_id": "sid-diy",
             "features": ["x1", "x2"],
@@ -682,6 +843,33 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(batch_resp.status_code, 200, batch_resp.get_data(as_text=True))
         batch_data = batch_resp.get_json()
         self.assertEqual(len(batch_data["clusters"]), 2)
+
+    def test_clustering_train_supports_async_task_result(self):
+        rows = ["x1,x2"]
+        for i in range(12):
+            rows.append(f"{i},{i + 1}")
+        for i in range(12):
+            rows.append(f"{100 + i},{101 + i}")
+
+        upload_resp = self._upload_csv("\n".join(rows), filename="cluster_async.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        train_resp = self.client.post("/api/clustering/train?async=1", json={
+            "session_id": sid,
+            "feature_cols": ["x1", "x2"],
+            "algorithm": "kmeans",
+            "params": {"n_clusters": 2},
+        })
+        self.assertEqual(train_resp.status_code, 202, train_resp.get_data(as_text=True))
+        task_id = train_resp.get_json()["task_id"]
+
+        task = self._wait_for_task(task_id)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertEqual(task["metadata"]["model_type"], "clustering")
+        self.assertEqual(task["result_payload"]["task_id"], task_id)
+        self.assertEqual(task["result_payload"]["n_found"], 2)
+        self.assertIn("version_id", task["result"])
 
     def test_llm_direct_chat_streams_chunks_and_done(self):
         def fake_stream_chat(_api_base, _api_key, _model, _messages):

@@ -17,7 +17,7 @@ from services._safe_serialize import (
 )
 
 
-def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
+def train(df, feature_cols, algorithm, params, dataset_name="", session_id="", user_id=None):
     """Train clustering model. Returns labels, metrics, PCA coords, and version_id."""
     df = df[feature_cols].dropna()
     if len(df) < 10:
@@ -105,6 +105,7 @@ def train(df, feature_cols, algorithm, params, dataset_name="", session_id=""):
     register_version("clustering", version_id, {
         "dataset_name": dataset_name,
         "session_id": session_id,
+        "user_id": user_id,
         "features": [str(c) for c in feature_cols],
         "target": "",
         "metrics": {"silhouette": sil, "n_clusters": n_found, "inertia": inertia},
@@ -149,9 +150,9 @@ def elbow(df, feature_cols, max_k):
     return result
 
 
-def predict_one(feature_values, version_id=None):
+def predict_one(feature_values, version_id=None, user_id=None):
     """Predict cluster for a new data point (K-means only)."""
-    paths, meta = get_model_paths("clustering", version_id)
+    paths, meta = get_model_paths("clustering", version_id, user_id=user_id)
     if not paths:
         return None, "没有找到已保存的聚类模型，请先训练模型或切换到有效版本。"
 
@@ -174,12 +175,12 @@ def predict_one(feature_values, version_id=None):
     return {"cluster": pred}, None
 
 
-def predict_batch(rows, version_id=None):
+def predict_batch(rows, version_id=None, user_id=None):
     """Predict clusters for many rows (K-means only)."""
     if len(rows) > 10000:
         return None, f"单次预测最多支持 10000 行，当前请求 {len(rows)} 行。请分批预测。"
 
-    paths, meta = get_model_paths("clustering", version_id)
+    paths, meta = get_model_paths("clustering", version_id, user_id=user_id)
     if not paths:
         return None, "没有找到已保存的聚类模型，请先训练模型或切换到有效版本。"
 

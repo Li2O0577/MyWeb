@@ -10,19 +10,25 @@
 - 数据上传：支持 CSV / Excel，上传后创建后端 session。
 - 数据预览：表格预览、字段类型、缺失值、异常值概览。
 - 数据清洗：行列操作、重命名、类型转换、缺失值处理、异常值处理、标准化/归一化、类别编码、噪声、计算列、自定义表达式、PCA。
-- 数据处理历史：后端 session 保存处理快照，支持撤销、重做、保存流水线和重复应用流水线。
+- 数据处理历史：后端 session 保存处理快照，支持撤销、重做、保存流水线、导入/导出流水线 JSON 和重复应用流水线。
 - 数据可视化：使用 Plotly 的 React 图表工作台，支持散点、折线、面积、柱状、直方图、箱线、小提琴、密度热力图、饼图/环图、散点矩阵、相关热力图、3D 散点等。
 - 模型页面：回归、分类、决策树、聚类、自定义 MLP 均已拆成独立工作区，并统一为“训练配置 / 结果分析 / 预测 / 批量预测”一类的页面结构。
 - 模型结果：版本列表、激活、删除、指标面板；分类和决策树分类支持 classification report。
+- 训练任务状态：训练接口会记录任务状态，前端模型页可查看最近训练任务、成功/失败、耗时和结果版本；回归、分类、决策树、聚类和 MLP 训练均支持 `?async=1` 后台任务。
+- 本地账号：支持注册、登录、退出；未登录不能访问 `/api/*` 业务接口。
+- 用户隔离：上传 session、数据处理历史、模型版本、模型激活状态和训练任务列表均按账号隔离。
+- 任务队列：训练任务进入进程内队列，支持全局并发限制、单用户并发限制和排队状态。
+- 任务取消：前端训练任务列表支持取消排队/运行中任务；排队任务会立即取消，运行中任务会标记为取消并在当前训练函数返回后结束。
 - 预测能力：回归、分类、MLP、决策树支持单条和批量预测；K-Means 聚类支持批量预测，DBSCAN 只能查看已训练结果。
 - LLM 分析：Direct Chat、Agent Chat、流式输出、图表/图片结果展示、API Key / Base / Model 配置面板。
 
-尚未完成的生产级多人能力：
+仍需进一步增强的生产级多人能力：
 
-- 没有账号、登录和权限控制。
-- session 和模型版本还没有按用户隔离。
-- 训练任务仍以同步请求为主，长训练后续应改为后台任务。
-- 还没有任务取消、队列、资源配额、审计日志和自动清理策略。
+- 当前账号系统是本地文件存储，适合单机/内网演示；正式部署建议迁移到数据库。
+- 当前登录 session 存在内存中，服务重启后需要重新登录。
+- 当前任务队列存在内存中，服务重启后任务状态会丢失。
+- 运行中任务只能“协作式取消”：不能强制终止正在执行的训练线程，只能阻止结果落库并标记为已取消。
+- 还没有角色权限、审计日志、自动清理策略、磁盘/CPU/GPU 配额和反暴力破解限流。
 
 ## 环境要求
 
@@ -158,10 +164,13 @@ MyWeb1/
 ├── backend/
 │   ├── app.py                    # Flask 入口，注册 API，并在生产模式提供 React 静态文件
 │   ├── requirements.txt          # 后端 Python 依赖
+│   ├── auth_store.py             # 本地账号和登录 cookie session
 │   ├── session_store.py          # session 持久化和恢复
+│   ├── task_store.py             # 后台任务队列、状态和取消
 │   ├── routes/                   # Flask API 路由
 │   ├── services/                 # 数据处理、可视化、模型、LLM 业务逻辑
 │   ├── models/                   # 模型注册表和模型版本文件
+│   ├── auth/                     # 本地账号数据，运行时生成，不提交
 │   └── sessions/                 # 上传数据 session 文件
 ├── frontend/
 │   ├── src/
@@ -185,6 +194,10 @@ MyWeb1/
 
 基础接口：
 
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
 - `GET /api/health`
 - `POST /api/data/upload`
 - `GET /api/data/<sid>/profile`
@@ -214,6 +227,9 @@ MyWeb1/
 - `GET /api/<model_type>/versions`
 - `POST /api/<model_type>/activate`
 - `DELETE /api/<model_type>/version/<version_id>`
+- `GET /api/tasks`
+- `GET /api/tasks/<task_id>`
+- `POST /api/tasks/<task_id>/cancel`
 - `POST /api/llm/chat`
 - `POST /api/llm/agent`
 
@@ -241,6 +257,8 @@ MyWeb1/
 | `FLASK_DEBUG` | `0` | 设置为 `1` 开启后端调试 |
 | `FRONTEND_DIST` | `frontend/dist` | React 构建产物目录 |
 | `CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 开发模式允许访问 API 的前端来源 |
+| `MYWEB1_GLOBAL_TASK_CONCURRENCY` | `2` | 全局最多同时运行的后台训练任务数 |
+| `MYWEB1_USER_TASK_CONCURRENCY` | `1` | 单个账号最多同时运行的后台训练任务数 |
 | `LLM_API_KEY` | 空 | 默认 LLM API Key |
 | `LLM_API_BASE` | 空 | OpenAI 兼容 API Base |
 | `LLM_MODEL` | 空 | 默认模型名 |
@@ -249,6 +267,7 @@ MyWeb1/
 ## 数据和模型文件
 
 - `backend/sessions/` 存放上传数据 session，属于运行数据。
+- `backend/auth/` 存放本地账号文件，属于运行数据，不应提交。
 - `backend/models/registry.py` 是模型注册表代码，需要保留。
 - `backend/models/registry.json` 和各模型子目录是训练产物，属于运行数据。
 - `.gitignore` 已排除 session、模型文件、前端构建产物、缓存和本地环境文件。
@@ -264,14 +283,14 @@ cd frontend
 npm run build
 ```
 
-测试里会打印两段预期异常日志，分别来自“不安全自定义表达式”和“非法热力图配置”的负向用例；只要最终显示 `OK` 就是通过。当前 smoke tests 覆盖了上传、处理历史、撤销/重做、流水线、可视化、模型和 LLM 基础接口。
+测试里会打印两段预期异常日志，分别来自“不安全自定义表达式”和“非法热力图配置”的负向用例；只要最终显示 `OK` 就是通过。当前 smoke tests 覆盖了登录保护、账号隔离、任务取消、上传、处理历史、撤销/重做、流水线、可视化、模型、训练任务状态和 LLM 基础接口。
 
 ## 下一步建议
 
 优先级建议：
 
 1. 继续补齐旧 Streamlit 里还没搬完的高级交互细节，例如图表筛选、模型解释和报告生成。
-2. 将数据处理流水线扩展为可导入/导出的 JSON 文件。
-3. 将长训练任务改为后台任务，并增加任务状态轮询。
-4. 增强 session id，并引入用户 / 工作区隔离。
-5. 加入认证、权限、资源限制、日志和资源清理策略。
+2. 给长训练增加真实进度百分比和阶段日志，让任务状态面板更可解释。
+3. 将账号、登录 session 和任务状态迁移为数据库表，避免服务重启后丢失。
+4. 增加资源配额、上传大小限制、登录限流、审计日志和自动清理策略。
+5. 正式部署时启用 HTTPS，并将登录 cookie 改为 `Secure`。

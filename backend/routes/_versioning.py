@@ -7,6 +7,7 @@ Usage in e.g. regression_routes.py:
 """
 
 from flask import jsonify, request
+from routes._auth import current_user_id
 from routes._responses import missing_field, service_error
 from models.registry import (
     list_versions, get_version, get_active_version,
@@ -19,10 +20,11 @@ def setup_version_routes(bp, model_type):
 
     @bp.route("/status", methods=["GET"])
     def status():
-        vid = get_active_version(model_type)
+        user_id = current_user_id()
+        vid = get_active_version(model_type, user_id=user_id)
         if not vid:
             return jsonify({"has_model": False})
-        meta = get_version(model_type, vid)
+        meta = get_version(model_type, vid, user_id=user_id)
         if not meta:
             return jsonify({"has_model": False})
         return jsonify({
@@ -56,13 +58,14 @@ def setup_version_routes(bp, model_type):
 
     @bp.route("/versions", methods=["GET"])
     def versions():
-        versions = list_versions(model_type)
-        active = get_active_version(model_type)
+        user_id = current_user_id()
+        versions = list_versions(model_type, user_id=user_id)
+        active = get_active_version(model_type, user_id=user_id)
         return jsonify({"versions": versions, "active": active})
 
     @bp.route("/version/<version_id>", methods=["GET"])
     def version_detail(version_id):
-        meta = get_version(model_type, version_id)
+        meta = get_version(model_type, version_id, user_id=current_user_id())
         if not meta:
             return service_error("VERSION_NOT_FOUND", "Version not found", 404)
         return jsonify({"version_id": version_id, **meta})
@@ -72,21 +75,22 @@ def setup_version_routes(bp, model_type):
         data = request.json or {}
         if "version_id" not in data:
             return missing_field("version_id")
-        ok = activate_version(model_type, data["version_id"])
+        ok = activate_version(model_type, data["version_id"], user_id=current_user_id())
         if not ok:
             return service_error("VERSION_NOT_FOUND", "Version not found", 404)
         return jsonify({"status": "activated", "version_id": data["version_id"]})
 
     @bp.route("/version/<version_id>", methods=["DELETE"])
     def delete_version_route(version_id):
-        ok = delete_version(model_type, version_id)
+        ok = delete_version(model_type, version_id, user_id=current_user_id())
         if not ok:
             return service_error("VERSION_NOT_FOUND", "Version not found", 404)
         return jsonify({"status": "deleted"})
 
     @bp.route("/clear", methods=["POST"])
     def clear():
-        vid = get_active_version(model_type)
+        user_id = current_user_id()
+        vid = get_active_version(model_type, user_id=user_id)
         if vid:
-            delete_version(model_type, vid)
+            delete_version(model_type, vid, user_id=user_id)
         return jsonify({"status": "cleared"})

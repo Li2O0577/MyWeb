@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -20,8 +20,17 @@ import {
   Upload,
   Wand2
 } from "lucide-react";
-import { API_BASE, fetchDataProfile, fetchHealth, uploadDataset } from "./services/api";
-import type { BackendStatus, ColumnProfile, DataProfile, HealthResponse, SavedModels, SessionMeta } from "./types";
+import {
+  API_BASE,
+  fetchDataProfile,
+  fetchHealth,
+  fetchMe,
+  login,
+  logout,
+  register,
+  uploadDataset
+} from "./services/api";
+import type { AuthUser, BackendStatus, ColumnProfile, DataProfile, HealthResponse, SavedModels, SessionMeta } from "./types";
 import DataProcessingWorkspace from "./components/DataProcessingWorkspace";
 import DataVisualization from "./components/DataVisualization";
 import LlmWorkspace from "./components/LlmWorkspace";
@@ -102,6 +111,72 @@ function DataRequired({ onUpload }: { onUpload: () => void }) {
         去数据加载
       </button>
     </section>
+  );
+}
+
+function AuthView({
+  mode,
+  username,
+  password,
+  error,
+  loading,
+  onModeChange,
+  onUsernameChange,
+  onPasswordChange,
+  onSubmit
+}: {
+  mode: "login" | "register";
+  username: string;
+  password: string;
+  error: string;
+  loading: boolean;
+  onModeChange: (mode: "login" | "register") => void;
+  onUsernameChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel" aria-label="账号登录">
+        <div className="brand auth-brand">
+          <div className="brand-mark" aria-hidden="true">I</div>
+          <div className="brand-copy">
+            <strong>Indeterminate</strong>
+            <span>Data science workspace</span>
+          </div>
+        </div>
+        <div className="auth-copy">
+          <span>Account</span>
+          <h1>{mode === "login" ? "登录工作台" : "创建本地账号"}</h1>
+          <p>账号用于隔离数据 session、模型版本和训练任务，并为后续队列、配额和权限管理提供基础。</p>
+        </div>
+        <div className="auth-tabs" role="tablist" aria-label="账号模式">
+          <button className={mode === "login" ? "active" : ""} type="button" onClick={() => onModeChange("login")}>登录</button>
+          <button className={mode === "register" ? "active" : ""} type="button" onClick={() => onModeChange("register")}>注册</button>
+        </div>
+        <label className="form-field">
+          <span>用户名</span>
+          <input value={username} onChange={(event) => onUsernameChange(event.target.value)} autoComplete="username" />
+        </label>
+        <label className="form-field">
+          <span>密码</span>
+          <input
+            value={password}
+            onChange={(event) => onPasswordChange(event.target.value)}
+            type="password"
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSubmit();
+            }}
+          />
+        </label>
+        {error ? <div className="inline-error">{error}</div> : null}
+        <button className="button primary auth-submit" type="button" onClick={onSubmit} disabled={loading}>
+          <Play size={15} aria-hidden="true" />
+          {loading ? "处理中..." : mode === "login" ? "登录" : "创建账号"}
+        </button>
+      </section>
+    </main>
   );
 }
 
@@ -214,6 +289,13 @@ function topOutlierColumns(profile: DataProfile | null) {
 }
 
 function App() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [error, setError] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
@@ -224,6 +306,15 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1");
   const [activeView, setActiveView] = useState<ViewId>(() => initialView());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchMe(controller.signal)
+      .then((nextUser) => setUser(nextUser))
+      .catch(() => setUser(null))
+      .finally(() => setAuthLoading(false));
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const syncHashView = () => {
@@ -239,6 +330,7 @@ function App() {
   }, [sidebarCollapsed]);
 
   useEffect(() => {
+    if (!user) return;
     const controller = new AbortController();
     setError("");
     fetchHealth(controller.signal)
@@ -249,11 +341,11 @@ function App() {
         setError(err instanceof Error ? err.message : "无法连接后端");
       });
     return () => controller.abort();
-  }, [refreshToken]);
+  }, [refreshToken, user]);
 
   useEffect(() => {
     const savedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!savedSessionId || profile) return;
+    if (!user || !savedSessionId || profile) return;
 
     const controller = new AbortController();
     setProfileLoading(true);
@@ -266,20 +358,66 @@ function App() {
       })
       .finally(() => setProfileLoading(false));
     return () => controller.abort();
-  }, [profile]);
+  }, [profile, user]);
+
+  const submitAuth = async () => {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const nextUser = authMode === "login"
+        ? await login(authUsername, authPassword)
+        : await register(authUsername, authPassword);
+      setUser(nextUser);
+      setAuthPassword("");
+      setRefreshToken((value) => value + 1);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "账号操作失败");
+    } finally {
+      setAuthBusy(false);
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setUser(null);
+    setHealth(null);
+    setProfile(null);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  };
+
+  if (authLoading) {
+    return <main className="auth-shell"><section className="auth-panel"><div className="empty-list">正在检查登录状态...</div></section></main>;
+  }
+
+  if (!user) {
+    return (
+      <AuthView
+        mode={authMode}
+        username={authUsername}
+        password={authPassword}
+        error={authError}
+        loading={authBusy}
+        onModeChange={setAuthMode}
+        onUsernameChange={setAuthUsername}
+        onPasswordChange={setAuthPassword}
+        onSubmit={submitAuth}
+      />
+    );
+  }
 
   const backendStatus = getBackendStatus(health, error);
-  const statusText = useMemo(() => {
-    if (backendStatus === "online") return "Flask API 已连接";
-    if (backendStatus === "degraded") return "Flask API 降级响应";
-    if (backendStatus === "offline") return "后端未连接";
-    return "正在检查后端";
-  }, [backendStatus]);
+  const statusText =
+    backendStatus === "online" ? "Flask API 已连接" :
+    backendStatus === "degraded" ? "Flask API 降级响应" :
+    backendStatus === "offline" ? "后端未连接" :
+    "正在检查后端";
 
   const recentSession = health?.recent_sessions?.[0];
   const riskColumns = countRiskColumns(profile);
   const outlierTotal = totalOutliers(profile);
   const previewRows = profile?.preview ?? [];
+  const previewDisplayRows = previewRows;
   const previewColumns = profile?.columns.slice(0, 12) ?? [];
   const activeCopy = viewCopy[activeView];
 
@@ -388,6 +526,7 @@ function App() {
             <code>{API_BASE}</code>
           </div>
           <div className="topbar-actions">
+            <div className="user-chip" title={user.user_id}>{user.username}</div>
             <button className="button ghost" type="button" onClick={() => setRefreshToken((value) => value + 1)}>
               <RefreshCcw size={15} aria-hidden="true" />
               刷新状态
@@ -395,6 +534,9 @@ function App() {
             <button className="button primary" type="button" onClick={() => fileInputRef.current?.click()}>
               <Play size={15} aria-hidden="true" />
               上传数据
+            </button>
+            <button className="button ghost" type="button" onClick={handleLogout}>
+              退出
             </button>
           </div>
         </header>
@@ -510,7 +652,9 @@ function App() {
                       <Table2 size={17} aria-hidden="true" />
                       <h2>数据预览</h2>
                     </span>
-                    <small>前 {previewRows.length} 行 · 显示 {previewColumns.length} 列</small>
+                    <small>
+                      已显示 {previewDisplayRows.length} 行预览 / 全量 {profile.n_rows.toLocaleString()} 行 · 显示 {previewColumns.length} / {profile.n_cols} 列
+                    </small>
                   </div>
                   <div className="table-wrap">
                     <table className="data-table">
@@ -522,7 +666,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {previewRows.slice(0, 20).map((row, rowIndex) => (
+                        {previewDisplayRows.map((row, rowIndex) => (
                           <tr key={rowIndex}>
                             {previewColumns.map((column) => (
                               <td key={column}>{valueToText(row[column])}</td>

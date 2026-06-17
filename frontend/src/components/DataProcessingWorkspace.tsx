@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Binary,
@@ -20,10 +20,12 @@ import {
   Trash2,
   Type,
   Undo2,
+  Upload,
   Wand2
 } from "lucide-react";
 import {
   applyProcessingPipeline,
+  fetchOutliers,
   fetchProcessingHistory,
   processData,
   redoProcessing,
@@ -124,6 +126,56 @@ function operationLabel(operation: Operation) {
   return labels[String(operation.op)] ?? String(operation.op ?? "处理步骤");
 }
 
+function safeFileName(value: string) {
+  const cleaned = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+  return cleaned || "processing-pipeline";
+}
+
+function downloadJsonFile(fileName: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function currentOperations(history: ProcessingHistory | null) {
+  if (!history) return [];
+  return history.history
+    .slice(1, Math.max(1, history.current_index + 1))
+    .flatMap((entry) => entry.operations ?? []);
+}
+
+function pipelineJson(name: string, operations: Operation[]) {
+  return {
+    version: 1,
+    kind: "indeterminate.processing_pipeline",
+    name,
+    exported_at: new Date().toISOString(),
+    operations
+  };
+}
+
+function parsePipelineFile(value: unknown): { name: string; operations: Operation[] } {
+  if (!value || typeof value !== "object") {
+    throw new Error("流水线 JSON 格式不正确。");
+  }
+  const root = value as Record<string, unknown>;
+  const source = root.pipeline && typeof root.pipeline === "object" ? root.pipeline as Record<string, unknown> : root;
+  const operations = source.operations;
+  if (!Array.isArray(operations) || operations.some((item) => !item || typeof item !== "object")) {
+    throw new Error("流水线 JSON 需要包含 operations 数组。");
+  }
+  return {
+    name: String(source.name || root.name || "导入的处理流水线"),
+    operations: operations as Operation[]
+  };
+}
+
 export default function DataProcessingWorkspace({ profile, onProfileChange }: DataProcessingWorkspaceProps) {
   const numericCols = profile.numeric_cols;
   const categoricalCols = profile.categorical_cols;
@@ -136,6 +188,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
   const [history, setHistory] = useState<ProcessingHistory | null>(profile.processing_history ?? null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [pipelineName, setPipelineName] = useState("当前处理流水线");
+  const pipelineInputRef = useRef<HTMLInputElement | null>(null);
   const [dropColumns, setDropColumns] = useState<string[]>([]);
   const [keepColumns, setKeepColumns] = useState<string[]>(profile.columns);
   const [rowPosition, setRowPosition] = useState(0);
@@ -149,6 +202,9 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
     numericCols.filter((column) => (profile.outliers[column]?.count ?? 0) > 0)
   );
   const [outlierCoefficient, setOutlierCoefficient] = useState(1.5);
+  const [detectedOutliers, setDetectedOutliers] = useState(profile.outliers);
+  const [outlierLoading, setOutlierLoading] = useState(false);
+  const [outlierError, setOutlierError] = useState("");
   const [outlierReplaceMethod, setOutlierReplaceMethod] = useState<"median" | "mean">("median");
 
   const [fillColumns, setFillColumns] = useState<string[]>(numericCols.slice(0, 1));
@@ -184,10 +240,34 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
     profile.column_profiles.find((column) => column.name === statsColumn && column.kind === "numeric") ??
     profile.column_profiles.find((column) => column.kind === "numeric");
   const outlierCandidateColumns = useMemo(
-    () => numericCols.filter((column) => (profile.outliers[column]?.count ?? 0) > 0),
-    [numericCols, profile.outliers]
+    () => numericCols.filter((column) => (detectedOutliers[column]?.count ?? 0) > 0),
+    [numericCols, detectedOutliers]
   );
-  const selectedOutlierCount = outlierColumns.reduce((sum, column) => sum + Number(profile.outliers[column]?.count ?? 0), 0);
+  const selectedOutlierCount = outlierColumns.reduce((sum, column) => sum + Number(detectedOutliers[column]?.count ?? 0), 0);
+  const outlierCoefficientLabel = outlierCoefficient === 1.5 ? "1.5x IQR" : "3.0x IQR";
+
+  useEffect(() => {
+    if (outlierCoefficient === 1.5) {
+      setDetectedOutliers(profile.outliers);
+      setOutlierError("");
+      setOutlierLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setOutlierLoading(true);
+    setOutlierError("");
+    setDetectedOutliers({});
+    fetchOutliers(profile.session_id, outlierCoefficient, controller.signal)
+      .then((payload) => setDetectedOutliers(payload))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setOutlierError(err instanceof Error ? err.message : "刷新异常值检测失败");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setOutlierLoading(false);
+      });
+    return () => controller.abort();
+  }, [outlierCoefficient, profile.outliers, profile.session_id]);
 
   useEffect(() => {
     setOutlierColumns((current) => {
@@ -264,6 +344,46 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
       setError(err instanceof Error ? err.message : "保存流水线失败");
     } finally {
       setHistoryBusy(false);
+    }
+  };
+
+  const exportCurrentPipeline = () => {
+    const operations = currentOperations(history);
+    if (!operations.length) {
+      setError("当前没有可导出的处理步骤。");
+      return;
+    }
+    const name = pipelineName.trim() || "当前处理流水线";
+    downloadJsonFile(`${safeFileName(name)}.pipeline.json`, pipelineJson(name, operations));
+    setMessage("已导出当前处理流水线 JSON。");
+  };
+
+  const exportSavedPipeline = (pipeline: ProcessingPipeline) => {
+    downloadJsonFile(
+      `${safeFileName(pipeline.name)}.pipeline.json`,
+      pipelineJson(pipeline.name, pipeline.operations)
+    );
+    setMessage(`已导出流水线：${pipeline.name}`);
+  };
+
+  const importPipeline = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setHistoryBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const text = await file.text();
+      const parsed = parsePipelineFile(JSON.parse(text));
+      const payload = await saveProcessingPipeline(profile.session_id, parsed.name, parsed.operations);
+      setHistory(payload.processing_history);
+      setPipelineName(parsed.name);
+      setMessage(`已导入流水线：${parsed.name}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入流水线失败");
+    } finally {
+      setHistoryBusy(false);
+      event.target.value = "";
     }
   };
 
@@ -377,6 +497,13 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
           </div>
 
           <div className="pipeline-panel" aria-label="保存的流水线">
+            <input
+              ref={pipelineInputRef}
+              className="file-input"
+              type="file"
+              accept=".json,application/json"
+              onChange={importPipeline}
+            />
             <div className="operation-columns two">
               <label className="form-field">
                 <span>流水线名称</span>
@@ -392,6 +519,16 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                 保存流水线
               </button>
             </div>
+            <div className="pipeline-actions">
+              <button className="button ghost" type="button" disabled={historyBusy || !history?.can_undo} onClick={exportCurrentPipeline}>
+                <Download size={15} aria-hidden="true" />
+                导出当前
+              </button>
+              <button className="button ghost" type="button" disabled={historyBusy} onClick={() => pipelineInputRef.current?.click()}>
+                <Upload size={15} aria-hidden="true" />
+                导入 JSON
+              </button>
+            </div>
             <div className="pipeline-list">
               {history?.pipelines?.length ? (
                 history.pipelines.map((pipeline) => (
@@ -400,10 +537,16 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                       <strong>{pipeline.name}</strong>
                       <span>{pipeline.step_count} 步 · {formatTime(pipeline.created_at)}</span>
                     </div>
-                    <button className="button ghost" type="button" disabled={busy || historyBusy} onClick={() => applyPipeline(pipeline)}>
-                      <PlayCircle size={15} aria-hidden="true" />
-                      应用
-                    </button>
+                    <div className="pipeline-row-actions">
+                      <button className="button ghost" type="button" disabled={historyBusy} onClick={() => exportSavedPipeline(pipeline)}>
+                        <Download size={15} aria-hidden="true" />
+                        导出
+                      </button>
+                      <button className="button ghost" type="button" disabled={busy || historyBusy} onClick={() => applyPipeline(pipeline)}>
+                        <PlayCircle size={15} aria-hidden="true" />
+                        应用
+                      </button>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -566,8 +709,11 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
               <AlertTriangle size={17} aria-hidden="true" />
               <h2>异常值处理</h2>
             </span>
-            <small>{selectedOutlierCount ? `${selectedOutlierCount} 个待处理` : "当前无异常值"}</small>
+            <small>
+              {outlierLoading ? `正在检测 ${outlierCoefficientLabel}` : selectedOutlierCount ? `${outlierCoefficientLabel} · ${selectedOutlierCount} 个待处理` : `${outlierCoefficientLabel} · 当前无异常值`}
+            </small>
           </div>
+          {outlierError ? <div className="inline-error">{outlierError}</div> : null}
           {outlierCandidateColumns.length ? (
             <>
               <div className="operation-columns two">
@@ -581,13 +727,13 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                     <button className={outlierCoefficient === 1.5 ? "selected" : ""} type="button" onClick={() => setOutlierCoefficient(1.5)}>1.5x IQR</button>
                     <button className={outlierCoefficient === 3 ? "selected" : ""} type="button" onClick={() => setOutlierCoefficient(3)}>3.0x IQR</button>
                   </div>
-                  <div className="operation-note">处理时后端会基于当前 session 重新计算边界。</div>
+                  <div className="operation-note">当前按 {outlierCoefficientLabel} 展示数量和边界，处理时会使用相同系数重新计算。</div>
                 </div>
               </div>
 
               <div className="outlier-detail-grid">
                 {outlierCandidateColumns.slice(0, 6).map((column) => {
-                  const info = profile.outliers[column] ?? {};
+                  const info = detectedOutliers[column] ?? {};
                   return (
                     <div className="outlier-detail" key={column}>
                       <strong>{column}</strong>
@@ -602,7 +748,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                 <button
                   className="button ghost"
                   type="button"
-                  disabled={busy || !outlierColumns.length}
+                  disabled={busy || outlierLoading || !outlierColumns.length}
                   onClick={() => applyOperations([{ op: "winsorize_outliers", cols: outlierColumns, coefficient: outlierCoefficient }], "已完成异常值缩尾处理")}
                 >
                   缩尾处理
@@ -610,7 +756,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                 <button
                   className={outlierReplaceMethod === "median" ? "button ghost active-soft" : "button ghost"}
                   type="button"
-                  disabled={busy || !outlierColumns.length}
+                  disabled={busy || outlierLoading || !outlierColumns.length}
                   onClick={() => {
                     setOutlierReplaceMethod("median");
                     void applyOperations([{ op: "replace_outliers", cols: outlierColumns, method: "median", coefficient: outlierCoefficient }], "已将异常值替换为中位数");
@@ -621,7 +767,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                 <button
                   className={outlierReplaceMethod === "mean" ? "button ghost active-soft" : "button ghost"}
                   type="button"
-                  disabled={busy || !outlierColumns.length}
+                  disabled={busy || outlierLoading || !outlierColumns.length}
                   onClick={() => {
                     setOutlierReplaceMethod("mean");
                     void applyOperations([{ op: "replace_outliers", cols: outlierColumns, method: "mean", coefficient: outlierCoefficient }], "已将异常值替换为均值");
@@ -632,7 +778,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
                 <button
                   className="button danger"
                   type="button"
-                  disabled={busy || !outlierColumns.length}
+                  disabled={busy || outlierLoading || !outlierColumns.length}
                   onClick={() => applyOperations([{ op: "drop_outliers", cols: outlierColumns, coefficient: outlierCoefficient }], "已删除包含异常值的行")}
                 >
                   删除异常行
@@ -640,7 +786,7 @@ export default function DataProcessingWorkspace({ profile, onProfileChange }: Da
               </div>
             </>
           ) : (
-            <div className="empty-list">当前数据未检测到明显异常值。</div>
+            <div className="empty-list">{outlierLoading ? `正在按 ${outlierCoefficientLabel} 检测异常值...` : `当前数据按 ${outlierCoefficientLabel} 未检测到明显异常值。`}</div>
           )}
         </article>
 

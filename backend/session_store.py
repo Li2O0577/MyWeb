@@ -90,7 +90,13 @@ def _ensure_history(sid):
     return meta
 
 
-def create_session(df, source_name=""):
+def _owns_session(meta, user_id=None):
+    if user_id is None:
+        return True
+    return str(meta.get("user_id") or "") == str(user_id)
+
+
+def create_session(df, source_name="", user_id=None):
     sid = uuid.uuid4().hex
     now = time.time()
     state_id = _new_state_id()
@@ -99,6 +105,7 @@ def create_session(df, source_name=""):
         "meta": {
             "session_id": sid,
             "source_name": source_name or "",
+            "user_id": user_id,
             "created_at": now,
             "updated_at": now,
             "n_rows": int(len(df)),
@@ -113,9 +120,11 @@ def create_session(df, source_name=""):
     return sid
 
 
-def get_session(sid):
+def get_session(sid, user_id=None):
     record = _sessions.get(sid)
     if record:
+        if not _owns_session(record["meta"], user_id):
+            return None
         return record["df"]
 
     data_path, meta_path = _paths(sid)
@@ -129,20 +138,22 @@ def get_session(sid):
     except Exception:
         return None
 
+    if not _owns_session(meta, user_id):
+        return None
     _sessions[sid] = {"df": df, "meta": meta}
     _ensure_history(sid)
     return df
 
 
-def get_session_meta(sid):
-    if get_session(sid) is None:
+def get_session_meta(sid, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
         return None
     _ensure_history(sid)
     return dict(_sessions[sid]["meta"])
 
 
-def update_session(sid, df, source_name=None, history_entry=None):
-    if get_session(sid) is None:
+def update_session(sid, df, source_name=None, history_entry=None, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
         return False
     meta = _sessions[sid]["meta"]
     _ensure_history(sid)
@@ -171,8 +182,8 @@ def update_session(sid, df, source_name=None, history_entry=None):
     return True
 
 
-def processing_history(sid):
-    if get_session(sid) is None:
+def processing_history(sid, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
         return None
     meta = _ensure_history(sid)
     history = meta.get("history") or []
@@ -186,8 +197,8 @@ def processing_history(sid):
     }
 
 
-def _restore_history_state(sid, target_index):
-    if get_session(sid) is None:
+def _restore_history_state(sid, target_index, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
         return None
     meta = _ensure_history(sid)
     history = meta.get("history") or []
@@ -207,22 +218,22 @@ def _restore_history_state(sid, target_index):
     return df
 
 
-def undo_session(sid):
-    hist = processing_history(sid)
+def undo_session(sid, user_id=None):
+    hist = processing_history(sid, user_id=user_id)
     if not hist or not hist["can_undo"]:
         return None
-    return _restore_history_state(sid, hist["current_index"] - 1)
+    return _restore_history_state(sid, hist["current_index"] - 1, user_id=user_id)
 
 
-def redo_session(sid):
-    hist = processing_history(sid)
+def redo_session(sid, user_id=None):
+    hist = processing_history(sid, user_id=user_id)
     if not hist or not hist["can_redo"]:
         return None
-    return _restore_history_state(sid, hist["current_index"] + 1)
+    return _restore_history_state(sid, hist["current_index"] + 1, user_id=user_id)
 
 
-def current_pipeline_operations(sid):
-    hist = processing_history(sid)
+def current_pipeline_operations(sid, user_id=None):
+    hist = processing_history(sid, user_id=user_id)
     if not hist:
         return None
     operations = []
@@ -231,11 +242,11 @@ def current_pipeline_operations(sid):
     return operations
 
 
-def save_pipeline(sid, name=None, operations=None):
-    if get_session(sid) is None:
+def save_pipeline(sid, name=None, operations=None, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
         return None
     meta = _ensure_history(sid)
-    ops = _json_safe(operations if operations is not None else current_pipeline_operations(sid))
+    ops = _json_safe(operations if operations is not None else current_pipeline_operations(sid, user_id=user_id))
     if not ops:
         return None
     pipeline = {
@@ -251,8 +262,8 @@ def save_pipeline(sid, name=None, operations=None):
     return pipeline
 
 
-def get_pipeline(sid, pipeline_id):
-    hist = processing_history(sid)
+def get_pipeline(sid, pipeline_id, user_id=None):
+    hist = processing_history(sid, user_id=user_id)
     if not hist:
         return None
     for pipeline in hist.get("pipelines") or []:
@@ -290,13 +301,15 @@ def cleanup_expired():
                 pass
 
 
-def active_session_count():
-    return len(_sessions)
+def active_session_count(user_id=None):
+    if user_id is None:
+        return len(_sessions)
+    return sum(1 for record in _sessions.values() if _owns_session(record["meta"], user_id))
 
 
-def recent_sessions(limit=8):
+def recent_sessions(limit=8, user_id=None):
     records = sorted(
-        (dict(item["meta"]) for item in _sessions.values()),
+        (dict(item["meta"]) for item in _sessions.values() if _owns_session(item["meta"], user_id)),
         key=lambda item: item.get("updated_at", 0),
         reverse=True,
     )

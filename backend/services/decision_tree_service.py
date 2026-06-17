@@ -17,7 +17,7 @@ from services._safe_serialize import safe_load_pickle
 
 
 def train(df, target_col, feature_cols, task_type, criterion, max_depth,
-          dataset_name="", session_id=""):
+          dataset_name="", session_id="", user_id=None):
     """Train decision tree. Returns metrics + version_id."""
     is_cls = (task_type == "classification")
     cols = feature_cols + [target_col]
@@ -140,6 +140,7 @@ def train(df, target_col, feature_cols, task_type, criterion, max_depth,
     register_version("decision_tree", version_id, {
         "dataset_name": dataset_name,
         "session_id": session_id,
+        "user_id": user_id,
         "features": feature_cols,
         "target": target_col,
         "categorical_features": cat_cols,
@@ -160,10 +161,10 @@ def _safe_load_pickle(path):
     return safe_load_pickle(path, Pipeline)
 
 
-def predict_one(input_dict, task_type, version_id=None):
+def predict_one(input_dict, task_type, version_id=None, user_id=None):
     """Single prediction. Returns (result, None) or (None, (code, message))."""
     import pandas as pd
-    paths, meta = get_model_paths("decision_tree", version_id)
+    paths, meta = get_model_paths("decision_tree", version_id, user_id=user_id)
     if not paths:
         return None, ("MODEL_NOT_FOUND", "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。")
 
@@ -193,10 +194,10 @@ def predict_one(input_dict, task_type, version_id=None):
         return {"pred_value": float(pred)}, None
 
 
-def predict_batch(input_rows, task_type, version_id=None):
+def predict_batch(input_rows, task_type, version_id=None, user_id=None):
     """Batch prediction. input_rows is a list of row dicts keyed by feature name."""
     import pandas as pd
-    paths, meta = get_model_paths("decision_tree", version_id)
+    paths, meta = get_model_paths("decision_tree", version_id, user_id=user_id)
     if not paths:
         return None, ("MODEL_NOT_FOUND", "没有找到已保存的决策树模型，请先训练模型或切换到有效版本。")
 

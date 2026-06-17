@@ -1,8 +1,9 @@
 """Flask backend for ML training & inference."""
 import os
 import threading
-from flask import Flask, send_from_directory
+from flask import Flask, request, send_from_directory
 from flask_cors import CORS
+from routes._auth import current_user
 from routes._responses import api_error
 from session_store import active_session_count, cleanup_expired, recent_sessions, restore_sessions
 
@@ -20,7 +21,7 @@ def _cors_origins():
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-CORS(app, resources={r"/api/*": {"origins": _cors_origins()}})
+CORS(app, resources={r"/api/*": {"origins": _cors_origins()}}, supports_credentials=True)
 
 FRONTEND_DIST = os.path.abspath(
     os.environ.get(
@@ -53,6 +54,7 @@ _schedule_cleanup()
 
 
 # ── Register blueprints ──
+from routes.auth_routes import auth_bp
 from routes.data_routes import data_bp
 from routes.regression_routes import reg_bp
 from routes.classification_routes import cls_bp
@@ -60,7 +62,9 @@ from routes.diy_mlp_routes import diy_bp
 from routes.decision_tree_routes import dt_bp
 from routes.clustering_routes import cluster_bp
 from routes.llm_routes import llm_bp
+from routes.task_routes import task_bp
 
+app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(data_bp, url_prefix="/api/data")
 app.register_blueprint(reg_bp, url_prefix="/api/regression")
 app.register_blueprint(cls_bp, url_prefix="/api/classification")
@@ -68,25 +72,45 @@ app.register_blueprint(diy_bp, url_prefix="/api/diy_mlp")
 app.register_blueprint(dt_bp, url_prefix="/api/decision_tree")
 app.register_blueprint(cluster_bp, url_prefix="/api/clustering")
 app.register_blueprint(llm_bp, url_prefix="/api/llm")
+app.register_blueprint(task_bp, url_prefix="/api/tasks")
+
+
+@app.before_request
+def require_api_login():
+    if not request.path.startswith("/api/"):
+        return None
+    if request.path.startswith("/api/auth/"):
+        return None
+    if current_user():
+        return None
+    return api_error("UNAUTHENTICATED", "请先登录。", 401)
 
 
 @app.route("/api/health")
 def health():
     try:
-        n_sessions = active_session_count()
+        user = current_user()
+        user_id = user.get("user_id") if user else None
+        n_sessions = active_session_count(user_id=user_id)
         from models.registry import get_active_version, get_registry
         reg = get_registry()
         model_files = {}
         for mt in ["regression", "classification", "diy_mlp", "decision_tree", "clustering"]:
-            active = reg.get(mt, {}).get("active")
-            n_versions = len(reg.get(mt, {}).get("versions", {}))
+            active = get_active_version(mt, user_id=user_id)
+            versions = [
+                item
+                for item in reg.get(mt, {}).get("versions", {}).values()
+                if str(item.get("user_id") or "") == str(user_id)
+            ]
+            n_versions = len(versions)
             model_files[mt] = active is not None
             model_files[f"{mt}_versions"] = n_versions
         return {
             "status": "ok",
             "active_sessions": n_sessions,
-            "recent_sessions": recent_sessions(),
+            "recent_sessions": recent_sessions(user_id=user_id),
             "saved_models": model_files,
+            "user": user,
         }
     except Exception as e:
         return {

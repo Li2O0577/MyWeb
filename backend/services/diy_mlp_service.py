@@ -47,7 +47,7 @@ class DynamicMLP(nn.Module):
 def train(df, target_col, feature_cols, layers_config,
           task_type, n_classes, learning_rate, optimizer_name,
           epochs, batch_size, val_split, patience, device_str,
-          dataset_name="", session_id=""):
+          dataset_name="", session_id="", user_id=None):
     """Train custom MLP. Returns task-specific metrics + losses + version_id."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
     is_cls = (task_type == "classification")
@@ -230,6 +230,7 @@ def train(df, target_col, feature_cols, layers_config,
     version_meta = {
         "dataset_name": dataset_name,
         "session_id": session_id,
+        "user_id": user_id,
         "features": [str(c) for c in feature_cols],
         "target": str(target_col),
         "metrics": metrics,
@@ -263,9 +264,9 @@ def train(df, target_col, feature_cols, layers_config,
     return result, None
 
 
-def _load_model(device, version_id=None):
+def _load_model(device, version_id=None, user_id=None):
     """Load model, scaler, config for the active (or specified) version."""
-    paths, meta = get_model_paths("diy_mlp", version_id)
+    paths, meta = get_model_paths("diy_mlp", version_id, user_id=user_id)
     if not paths:
         return None, None, None, "没有找到已保存的 DIY MLP 模型，请先训练模型或切换到有效版本。"
 
@@ -281,10 +282,10 @@ def _load_model(device, version_id=None):
     return model, scaler, config, None
 
 
-def predict_one(feature_values, device_str="cpu", version_id=None):
+def predict_one(feature_values, device_str="cpu", version_id=None, user_id=None):
     """Single prediction. Returns task-specific result."""
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    model, scaler, config, err = _load_model(device, version_id)
+    model, scaler, config, err = _load_model(device, version_id, user_id=user_id)
     if err:
         return None, err
 
@@ -320,12 +321,12 @@ def predict_one(feature_values, device_str="cpu", version_id=None):
 MAX_BATCH_SIZE = 10000
 
 
-def predict_batch(rows, device_str="cpu", version_id=None):
+def predict_batch(rows, device_str="cpu", version_id=None, user_id=None):
     """Batch prediction."""
     if len(rows) > MAX_BATCH_SIZE:
         return None, f"单次预测最多支持 {MAX_BATCH_SIZE} 行，当前请求 {len(rows)} 行。请分批预测。"
     device = torch.device("cuda" if device_str == "cuda" and torch.cuda.is_available() else "cpu")
-    model, scaler, config, err = _load_model(device, version_id)
+    model, scaler, config, err = _load_model(device, version_id, user_id=user_id)
     if err:
         return None, err
 

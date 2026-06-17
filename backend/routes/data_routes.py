@@ -1,6 +1,7 @@
 """Data upload & processing API routes."""
 import logging
 from flask import Blueprint, request, jsonify
+from routes._auth import current_user_id
 from routes._responses import api_error, session_expired
 from services.data_service import (
     parse_file,
@@ -31,8 +32,9 @@ MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
 
 
 def _profile_response(df, sid, extra=None):
-    profile = build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid))
-    profile["processing_history"] = processing_history(sid)
+    user_id = current_user_id()
+    profile = build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid, user_id=user_id))
+    profile["processing_history"] = processing_history(sid, user_id=user_id)
     if extra:
         profile.update(extra)
     return profile
@@ -61,7 +63,7 @@ def upload():
                 413,
             )
         df = parse_file(file_bytes, file.filename)
-        sid = create_session(df, source_name=file.filename)
+        sid = create_session(df, source_name=file.filename, user_id=current_user_id())
         return jsonify(_profile_response(df, sid))
     except Exception:
         _log.exception("Failed to parse uploaded file")
@@ -76,17 +78,23 @@ def upload():
 @data_bp.route("/<sid>/outliers", methods=["GET"])
 def get_outliers(sid):
     """Re-run outlier detection on session data."""
-    df = get_session(sid)
+    df = get_session(sid, user_id=current_user_id())
     if df is None:
         return session_expired()
-    outliers = detect_outliers(df, coefficient=1.5)
-    return jsonify({"outliers": {str(k): v for k, v in outliers.items()}})
+    try:
+        coefficient = float(request.args.get("coefficient", 1.5))
+    except (TypeError, ValueError):
+        return api_error("INVALID_OUTLIER_COEFFICIENT", "异常值检测系数必须是数字。", 400)
+    if coefficient <= 0 or coefficient > 10:
+        return api_error("INVALID_OUTLIER_COEFFICIENT", "异常值检测系数需要在 0 到 10 之间。", 400)
+    outliers = detect_outliers(df, coefficient=coefficient)
+    return jsonify({"coefficient": coefficient, "outliers": {str(k): v for k, v in outliers.items()}})
 
 
 @data_bp.route("/<sid>/process", methods=["POST"])
 def process_data(sid):
     """Apply processing operations to session data. Returns updated preview."""
-    df = get_session(sid)
+    df = get_session(sid, user_id=current_user_id())
     if df is None:
         return session_expired()
 
@@ -103,7 +111,7 @@ def process_data(sid):
             str(exc) or "请检查选择的列、行号、目标类型或表达式是否有效。",
         )
 
-    update_session(sid, df, history_entry={
+    update_session(sid, df, user_id=current_user_id(), history_entry={
         "label": messages[0] if messages else "数据处理",
         "operations": ops,
         "messages": messages,
@@ -115,7 +123,7 @@ def process_data(sid):
 @data_bp.route("/<sid>/profile", methods=["GET"])
 def get_profile(sid):
     """Return structured profile + preview for frontend recovery and data pages."""
-    df = get_session(sid)
+    df = get_session(sid, user_id=current_user_id())
     if df is None:
         return session_expired()
     return jsonify(_profile_response(df, sid))
@@ -124,17 +132,18 @@ def get_profile(sid):
 @data_bp.route("/<sid>/history", methods=["GET"])
 def get_processing_history(sid):
     """Return processing history, undo/redo state, and saved pipelines."""
-    if get_session(sid) is None:
+    if get_session(sid, user_id=current_user_id()) is None:
         return session_expired()
-    return jsonify(processing_history(sid))
+    return jsonify(processing_history(sid, user_id=current_user_id()))
 
 
 @data_bp.route("/<sid>/undo", methods=["POST"])
 def undo_processing(sid):
     """Restore the previous processing snapshot for this session."""
-    df = undo_session(sid)
+    user_id = current_user_id()
+    df = undo_session(sid, user_id=user_id)
     if df is None:
-        if get_session(sid) is None:
+        if get_session(sid, user_id=user_id) is None:
             return session_expired()
         return api_error("UNDO_NOT_AVAILABLE", "当前没有可撤销的数据处理步骤", 400)
     return jsonify(_profile_response(df, sid, {"operations_applied": ["已撤销上一步处理"]}))
@@ -143,9 +152,10 @@ def undo_processing(sid):
 @data_bp.route("/<sid>/redo", methods=["POST"])
 def redo_processing(sid):
     """Restore the next processing snapshot for this session."""
-    df = redo_session(sid)
+    user_id = current_user_id()
+    df = redo_session(sid, user_id=user_id)
     if df is None:
-        if get_session(sid) is None:
+        if get_session(sid, user_id=user_id) is None:
             return session_expired()
         return api_error("REDO_NOT_AVAILABLE", "当前没有可重做的数据处理步骤", 400)
     return jsonify(_profile_response(df, sid, {"operations_applied": ["已重做下一步处理"]}))
@@ -154,10 +164,11 @@ def redo_processing(sid):
 @data_bp.route("/<sid>/pipelines", methods=["POST"])
 def save_processing_pipeline(sid):
     """Save current processing history or supplied operations as a reusable pipeline."""
-    if get_session(sid) is None:
+    user_id = current_user_id()
+    if get_session(sid, user_id=user_id) is None:
         return session_expired()
     data = request.json or {}
-    pipeline = save_pipeline(sid, name=data.get("name"), operations=data.get("operations"))
+    pipeline = save_pipeline(sid, name=data.get("name"), operations=data.get("operations"), user_id=user_id)
     if pipeline is None:
         return api_error(
             "PIPELINE_EMPTY",
@@ -165,16 +176,17 @@ def save_processing_pipeline(sid):
             400,
             "请先执行至少一步数据处理，或提交 operations 字段。",
         )
-    return jsonify({"pipeline": pipeline, "processing_history": processing_history(sid)})
+    return jsonify({"pipeline": pipeline, "processing_history": processing_history(sid, user_id=user_id)})
 
 
 @data_bp.route("/<sid>/pipelines/<pipeline_id>/apply", methods=["POST"])
 def apply_processing_pipeline(sid, pipeline_id):
     """Apply a saved processing pipeline to the current session data."""
-    df = get_session(sid)
+    user_id = current_user_id()
+    df = get_session(sid, user_id=user_id)
     if df is None:
         return session_expired()
-    pipeline = get_pipeline(sid, pipeline_id)
+    pipeline = get_pipeline(sid, pipeline_id, user_id=user_id)
     if pipeline is None:
         return api_error("PIPELINE_NOT_FOUND", "没有找到对应的数据处理流水线", 404)
     operations = pipeline.get("operations") or []
@@ -188,7 +200,7 @@ def apply_processing_pipeline(sid, pipeline_id):
             400,
             str(exc) or "请检查流水线中的列名、表达式或数据类型是否仍然适用于当前数据。",
         )
-    update_session(sid, df, history_entry={
+    update_session(sid, df, user_id=user_id, history_entry={
         "label": f"应用流水线：{pipeline.get('name') or pipeline_id}",
         "operations": operations,
         "messages": messages,
@@ -199,16 +211,16 @@ def apply_processing_pipeline(sid, pipeline_id):
 @data_bp.route("/<sid>/summary", methods=["GET"])
 def get_summary(sid):
     """Get data summary for LLM analysis."""
-    df = get_session(sid)
+    df = get_session(sid, user_id=current_user_id())
     if df is None:
         return session_expired()
-    return jsonify({"summary": build_data_summary(df), "session_meta": get_session_meta(sid)})
+    return jsonify({"summary": build_data_summary(df), "session_meta": get_session_meta(sid, user_id=current_user_id())})
 
 
 @data_bp.route("/<sid>/visualize", methods=["POST"])
 def visualize_data(sid):
     """Return structured chart data for the React visualization workspace."""
-    df = get_session(sid)
+    df = get_session(sid, user_id=current_user_id())
     if df is None:
         return session_expired()
 
@@ -249,11 +261,11 @@ def sync_data(sid):
                 detail="请减少数据量后再同步。",
             )
         df = parse_file(file_bytes, file.filename)
-        if not update_session(sid, df, source_name=file.filename):
+        if not update_session(sid, df, source_name=file.filename, user_id=current_user_id()):
             return session_expired()
         return jsonify({
             "status": "synced",
-            "session_meta": get_session_meta(sid),
+            "session_meta": get_session_meta(sid, user_id=current_user_id()),
             "n_rows": len(df),
             "n_cols": len(df.columns),
         })

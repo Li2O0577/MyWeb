@@ -2,6 +2,12 @@ export type BackendStatus = "checking" | "online" | "offline" | "degraded";
 
 export type SavedModels = Record<string, boolean | number | undefined>;
 
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  created_at?: number;
+}
+
 export interface SessionMeta {
   session_id?: string;
   source_name?: string;
@@ -31,6 +37,18 @@ export interface ColumnProfile {
   } | null;
 }
 
+export interface OutlierInfo {
+  count?: number;
+  nan_count?: number;
+  lower_bound?: number | null;
+  upper_bound?: number | null;
+  method?: string;
+  indices?: Array<string | number>;
+  values?: unknown[];
+}
+
+export type OutlierMap = Record<string, OutlierInfo>;
+
 export interface DataProfile {
   session_id: string;
   session_meta?: SessionMeta;
@@ -42,15 +60,7 @@ export interface DataProfile {
   dtypes: Record<string, string>;
   missing_counts: Record<string, number>;
   missing_total: number;
-  outliers: Record<string, {
-    count?: number;
-    nan_count?: number;
-    lower_bound?: number | null;
-    upper_bound?: number | null;
-    method?: string;
-    indices?: Array<string | number>;
-    values?: unknown[];
-  }>;
+  outliers: OutlierMap;
   column_profiles: ColumnProfile[];
   preview: Array<Record<string, unknown>>;
   summary: string;
@@ -108,6 +118,27 @@ export interface ModelVersion {
 export interface ModelVersionsResponse {
   versions: ModelVersion[];
   active?: string | null;
+}
+
+export type TaskStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
+
+export interface TaskRecord {
+  task_id: string;
+  kind: string;
+  label: string;
+  status: TaskStatus;
+  created_at: number;
+  updated_at: number;
+  finished_at?: number | null;
+  duration_sec?: number | null;
+  metadata?: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+  result_payload?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+export interface TaskListResponse {
+  tasks: TaskRecord[];
 }
 
 export type ApiJson = Record<string, unknown>;

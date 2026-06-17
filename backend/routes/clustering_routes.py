@@ -1,11 +1,14 @@
 """Clustering training & prediction API routes."""
 from flask import Blueprint, jsonify, request
 
+from routes._auth import current_user_id
 from routes._helpers import coerce_columns_like, numeric_prediction_error, prediction_exception_message
 from routes._responses import missing_field, service_error, session_expired
+from routes._training_tasks import run_or_submit_training, wants_async_training
 from routes._versioning import setup_version_routes
 from services.clustering_service import elbow, predict_batch, predict_one, train
 from session_store import get_session, get_session_meta
+from task_store import create_task
 
 cluster_bp = Blueprint("clustering", __name__)
 setup_version_routes(cluster_bp, "clustering")
@@ -18,7 +21,8 @@ def train_route():
         if field not in data:
             return missing_field(field)
 
-    df = get_session(data["session_id"])
+    user_id = current_user_id()
+    df = get_session(data["session_id"], user_id=user_id)
     if df is None:
         return session_expired()
 
@@ -32,20 +36,39 @@ def train_route():
     else:
         return service_error("INVALID_ALGORITHM", "聚类算法只支持 kmeans 或 dbscan。", 400)
 
-    try:
+    feature_cols = coerce_columns_like(df, data["feature_cols"])
+    meta = get_session_meta(data["session_id"], user_id=user_id) or {}
+    task_id = create_task("training", "聚类训练", {
+        "model_type": "clustering",
+        "session_id": data["session_id"],
+        "dataset_name": meta.get("source_name", ""),
+        "user_id": user_id,
+        "feature_count": len(feature_cols),
+        "algorithm": algorithm,
+    })
+    df_snapshot = df.copy(deep=True)
+
+    def run_training():
         result, err = train(
-            df,
-            coerce_columns_like(df, data["feature_cols"]),
+            df_snapshot,
+            feature_cols,
             algorithm,
             params,
-            dataset_name=(get_session_meta(data["session_id"]) or {}).get("source_name", ""),
+            dataset_name=meta.get("source_name", ""),
             session_id=data["session_id"],
+            user_id=user_id,
         )
-    except Exception:
-        return service_error("TRAINING_FAILED", "聚类训练失败，请检查字段类型和训练参数。", 400)
-    if err:
-        return service_error("TRAINING_FAILED", err, 400)
-    return jsonify(result)
+        if err:
+            raise ValueError(err)
+        result["task_id"] = task_id
+        return result
+
+    return run_or_submit_training(
+        task_id,
+        run_training,
+        wants_async_training(request, data),
+        "聚类训练失败，请检查字段类型和训练参数。",
+    )
 
 
 @cluster_bp.route("/elbow", methods=["POST"])
@@ -54,7 +77,7 @@ def elbow_route():
     for field in ("session_id", "feature_cols"):
         if field not in data:
             return missing_field(field)
-    df = get_session(data["session_id"])
+    df = get_session(data["session_id"], user_id=current_user_id())
     if df is None:
         return session_expired()
     result = elbow(df, coerce_columns_like(df, data["feature_cols"]), int(data.get("max_k", 10)))
@@ -69,7 +92,7 @@ def predict_route():
     if err := numeric_prediction_error(data["features"], "聚类预测输入"):
         return service_error("PREDICTION_FAILED", err, 400)
     try:
-        result, err = predict_one(data["features"], data.get("version_id"))
+        result, err = predict_one(data["features"], data.get("version_id"), user_id=current_user_id())
     except Exception:
         return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:
@@ -86,7 +109,7 @@ def batch_predict_route():
     if err := numeric_prediction_error(data["rows"], "聚类批量预测输入", batch=True):
         return service_error("PREDICTION_FAILED", err, 400)
     try:
-        result, err = predict_batch(data["rows"], data.get("version_id"))
+        result, err = predict_batch(data["rows"], data.get("version_id"), user_id=current_user_id())
     except Exception:
         return service_error("PREDICTION_FAILED", prediction_exception_message(), 400)
     if err:

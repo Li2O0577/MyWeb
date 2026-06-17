@@ -80,6 +80,7 @@ frontend/vite.config.js
 
 # 后端 session 临时数据
 backend/sessions/
+backend/auth/
 
 # Claude 配置（不提交）
 CLAUDE.md
