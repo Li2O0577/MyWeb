@@ -19,6 +19,8 @@
 - 用户隔离：上传 session、数据处理历史、模型版本、模型激活状态和训练任务列表均按账号隔离。
 - 任务队列：训练任务进入进程内队列，支持全局并发限制、单用户并发限制和排队状态。
 - 任务取消：前端训练任务列表支持取消排队/运行中任务；排队任务会立即取消，运行中任务会标记为取消并在当前训练函数返回后结束。
+- 基础资源保护：支持上传大小、数据集行列数、每账号 session 数量、每账号等待任务数量限制；同步训练请求也不能绕过并发限制。
+- 认证保护：登录按“来源 IP + 用户名”统计连续失败，注册按来源 IP 限制频率，超限后返回 `Retry-After`。
 - 预测能力：回归、分类、MLP、决策树支持单条和批量预测；K-Means 聚类支持批量预测，DBSCAN 只能查看已训练结果。
 - LLM 分析：Direct Chat、Agent Chat、流式输出、图表/图片结果展示、API Key / Base / Model 配置面板。
 
@@ -28,7 +30,7 @@
 - 当前登录 session 存在内存中，服务重启后需要重新登录。
 - 当前任务队列存在内存中，服务重启后任务状态会丢失。
 - 运行中任务只能“协作式取消”：不能强制终止正在执行的训练线程，只能阻止结果落库并标记为已取消。
-- 还没有角色权限、审计日志、自动清理策略、磁盘/CPU/GPU 配额和反暴力破解限流。
+- 还没有角色权限、审计日志、账号禁用、数据库级限流、磁盘/CPU/GPU 配额和完整自动清理策略。
 
 ## 环境要求
 
@@ -200,6 +202,7 @@ MyWeb1/
 - `GET /api/auth/me`
 - `GET /api/health`
 - `POST /api/data/upload`
+- `DELETE /api/data/<sid>`
 - `GET /api/data/<sid>/profile`
 - `POST /api/data/<sid>/process`
 - `POST /api/data/<sid>/visualize`
@@ -259,6 +262,16 @@ MyWeb1/
 | `CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 开发模式允许访问 API 的前端来源 |
 | `MYWEB1_GLOBAL_TASK_CONCURRENCY` | `2` | 全局最多同时运行的后台训练任务数 |
 | `MYWEB1_USER_TASK_CONCURRENCY` | `1` | 单个账号最多同时运行的后台训练任务数 |
+| `MYWEB1_MAX_PENDING_TASKS_PER_USER` | `5` | 单账号最多等待或运行中的训练任务数 |
+| `MYWEB1_MAX_UPLOAD_MB` | `256` | 单次上传最大 MB 数 |
+| `MYWEB1_MAX_DATASET_ROWS` | `500000` | 单个上传数据集最大行数 |
+| `MYWEB1_MAX_DATASET_COLUMNS` | `1000` | 单个上传数据集最大列数 |
+| `MYWEB1_MAX_SESSIONS_PER_USER` | `10` | 单账号最多保留的活跃数据 session 数 |
+| `MYWEB1_LOGIN_MAX_FAILURES` | `5` | 登录失败窗口内允许的最大失败次数 |
+| `MYWEB1_LOGIN_WINDOW_SECONDS` | `300` | 登录失败统计窗口，单位秒 |
+| `MYWEB1_LOGIN_LOCK_SECONDS` | `900` | 超限后的临时锁定时间，单位秒 |
+| `MYWEB1_REGISTER_MAX_ATTEMPTS` | `5` | 单个来源在窗口内最多注册尝试次数 |
+| `MYWEB1_REGISTER_WINDOW_SECONDS` | `3600` | 注册频率统计窗口，单位秒 |
 | `LLM_API_KEY` | 空 | 默认 LLM API Key |
 | `LLM_API_BASE` | 空 | OpenAI 兼容 API Base |
 | `LLM_MODEL` | 空 | 默认模型名 |
@@ -283,7 +296,7 @@ cd frontend
 npm run build
 ```
 
-测试里会打印两段预期异常日志，分别来自“不安全自定义表达式”和“非法热力图配置”的负向用例；只要最终显示 `OK` 就是通过。当前 smoke tests 覆盖了登录保护、账号隔离、任务取消、上传、处理历史、撤销/重做、流水线、可视化、模型、训练任务状态和 LLM 基础接口。
+测试里会打印两段预期异常日志，分别来自“不安全自定义表达式”和“非法热力图配置”的负向用例；只要最终显示 `OK` 就是通过。当前 smoke tests 覆盖了登录保护、登录限流、账号隔离、资源配额、任务取消、上传、处理历史、撤销/重做、流水线、可视化、模型、训练任务状态和 LLM 基础接口。
 
 ## 下一步建议
 
@@ -292,5 +305,5 @@ npm run build
 1. 继续补齐旧 Streamlit 里还没搬完的高级交互细节，例如图表筛选、模型解释和报告生成。
 2. 给长训练增加真实进度百分比和阶段日志，让任务状态面板更可解释。
 3. 将账号、登录 session 和任务状态迁移为数据库表，避免服务重启后丢失。
-4. 增加资源配额、上传大小限制、登录限流、审计日志和自动清理策略。
+4. 将当前基础配额扩展为磁盘、CPU、GPU 和模型存储配额，并增加审计日志和账号管理。
 5. 正式部署时启用 HTTPS，并将登录 cookie 改为 `Secure`。

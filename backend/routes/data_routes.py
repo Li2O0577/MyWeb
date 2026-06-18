@@ -3,6 +3,13 @@ import logging
 from flask import Blueprint, request, jsonify
 from routes._auth import current_user_id
 from routes._responses import api_error, session_expired
+from resource_limits import (
+    MAX_DATASET_COLUMNS,
+    MAX_DATASET_ROWS,
+    MAX_SESSIONS_PER_USER,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
+)
 from services.data_service import (
     parse_file,
     detect_outliers,
@@ -13,7 +20,9 @@ from services.data_service import (
 )
 from services.visualization_service import build_visualization_payload
 from session_store import (
+    active_session_count,
     create_session,
+    delete_session as delete_data_session,
     get_pipeline,
     get_session,
     get_session_meta,
@@ -28,9 +37,6 @@ data_bp = Blueprint("data", __name__)
 _log = logging.getLogger(__name__)
 
 
-MAX_FILE_SIZE = 256 * 1024 * 1024  # 256 MB
-
-
 def _profile_response(df, sid, extra=None):
     user_id = current_user_id()
     profile = build_data_profile(df, session_id=sid, session_meta=get_session_meta(sid, user_id=user_id))
@@ -42,28 +48,52 @@ def _profile_response(df, sid, extra=None):
 @data_bp.route("/upload", methods=["POST"])
 def upload():
     """Upload CSV/Excel, return session_id + data summary."""
+    user_id = current_user_id()
+    if active_session_count(user_id=user_id) >= MAX_SESSIONS_PER_USER:
+        return api_error(
+            "SESSION_QUOTA_EXCEEDED",
+            f"当前账号最多保留 {MAX_SESSIONS_PER_USER} 个活跃数据 session。",
+            429,
+            "请在首页删除不再需要的 session，或联系管理员调整 MYWEB1_MAX_SESSIONS_PER_USER。",
+        )
+
+
     if 'file' not in request.files:
         return api_error("NO_FILE", "没有收到上传文件", 400, "请在 file 表单字段中上传 CSV 或 Excel 文件。")
     file = request.files['file']
     # Check Content-Length before reading into memory
     cl = request.content_length
-    if cl is not None and cl > MAX_FILE_SIZE:
+    if cl is not None and cl > MAX_UPLOAD_BYTES:
         return api_error(
             "FILE_TOO_LARGE",
-            f"上传文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 256 MB。",
+            f"上传文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 {MAX_UPLOAD_MB} MB。",
             413,
             detail="请先压缩、拆分文件，或减少数据量后再上传。",
         )
     try:
         file_bytes = file.read()
-        if len(file_bytes) > MAX_FILE_SIZE:
+        if len(file_bytes) > MAX_UPLOAD_BYTES:
             return api_error(
                 "FILE_TOO_LARGE",
-                f"上传文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 256 MB。",
+                f"上传文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 {MAX_UPLOAD_MB} MB。",
                 413,
             )
         df = parse_file(file_bytes, file.filename)
-        sid = create_session(df, source_name=file.filename, user_id=current_user_id())
+        if len(df) > MAX_DATASET_ROWS:
+            return api_error(
+                "DATASET_ROW_LIMIT_EXCEEDED",
+                f"数据集包含 {len(df):,} 行，单个数据集最多允许 {MAX_DATASET_ROWS:,} 行。",
+                413,
+                "请先抽样或拆分数据文件后重新上传。",
+            )
+        if len(df.columns) > MAX_DATASET_COLUMNS:
+            return api_error(
+                "DATASET_COLUMN_LIMIT_EXCEEDED",
+                f"数据集包含 {len(df.columns):,} 列，单个数据集最多允许 {MAX_DATASET_COLUMNS:,} 列。",
+                413,
+                "请减少字段数量后重新上传。",
+            )
+        sid = create_session(df, source_name=file.filename, user_id=user_id)
         return jsonify(_profile_response(df, sid))
     except Exception:
         _log.exception("Failed to parse uploaded file")
@@ -73,6 +103,13 @@ def upload():
             400,
             "请确认文件格式为 CSV 或 Excel，且内容没有损坏。",
         )
+
+
+@data_bp.route("/<sid>", methods=["DELETE"])
+def delete_session_route(sid):
+    if not delete_data_session(sid, user_id=current_user_id()):
+        return session_expired()
+    return jsonify({"deleted": sid})
 
 
 @data_bp.route("/<sid>/outliers", methods=["GET"])

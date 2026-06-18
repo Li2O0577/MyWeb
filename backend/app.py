@@ -5,10 +5,18 @@ from flask import Flask, request, send_from_directory
 from flask_cors import CORS
 from routes._auth import current_user
 from routes._responses import api_error
+from resource_limits import (
+    MAX_DATASET_COLUMNS,
+    MAX_DATASET_ROWS,
+    MAX_PENDING_TASKS_PER_USER,
+    MAX_SESSIONS_PER_USER,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
+)
 from session_store import active_session_count, cleanup_expired, recent_sessions, restore_sessions
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256 MB per request
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 
 def _cors_origins():
@@ -92,6 +100,8 @@ def health():
         user = current_user()
         user_id = user.get("user_id") if user else None
         n_sessions = active_session_count(user_id=user_id)
+        from task_store import pending_task_count
+        n_pending_tasks = pending_task_count(user_id=user_id)
         from models.registry import get_active_version, get_registry
         reg = get_registry()
         model_files = {}
@@ -108,6 +118,17 @@ def health():
         return {
             "status": "ok",
             "active_sessions": n_sessions,
+            "resource_usage": {
+                "active_sessions": n_sessions,
+                "pending_tasks": n_pending_tasks,
+            },
+            "resource_limits": {
+                "max_sessions_per_user": MAX_SESSIONS_PER_USER,
+                "max_pending_tasks_per_user": MAX_PENDING_TASKS_PER_USER,
+                "max_upload_mb": MAX_UPLOAD_MB,
+                "max_dataset_rows": MAX_DATASET_ROWS,
+                "max_dataset_columns": MAX_DATASET_COLUMNS,
+            },
             "recent_sessions": recent_sessions(user_id=user_id),
             "saved_models": model_files,
             "user": user,
@@ -117,6 +138,8 @@ def health():
             "status": "degraded",
             "error": str(e),
             "active_sessions": 0,
+            "resource_usage": {},
+            "resource_limits": {},
             "recent_sessions": [],
             "saved_models": {},
         }

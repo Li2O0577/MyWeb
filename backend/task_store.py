@@ -4,6 +4,8 @@ import threading
 import time
 import uuid
 
+from resource_limits import MAX_PENDING_TASKS_PER_USER
+
 _tasks = {}
 _lock = threading.RLock()
 _queue = []
@@ -49,6 +51,26 @@ def _user_id(task):
 
 def _running_count_for_user(user_id):
     return sum(1 for task_id in _running if _user_id(_tasks.get(task_id) or {}) == str(user_id or ""))
+
+
+def _pending_count_for_user(user_id, exclude_task_id=None):
+    pending = {"queued", "running", "cancelling"}
+    return sum(
+        1
+        for task_id, task in _tasks.items()
+        if task_id != exclude_task_id
+        and _user_id(task) == str(user_id or "")
+        and task.get("status") in pending
+    )
+
+
+def _reject_task_locked(task, message):
+    now = _now()
+    task["status"] = "failed"
+    task["updated_at"] = now
+    task["finished_at"] = now
+    task["duration_sec"] = round(now - float(task["created_at"]), 3)
+    task["error"] = message
 
 
 def create_task(kind, label, metadata=None, status="running"):
@@ -135,11 +157,37 @@ def submit_task(task_id, work):
         task = _tasks.get(task_id)
         if not task:
             return None
+        user_id = _user_id(task)
+        if user_id and _pending_count_for_user(user_id, exclude_task_id=task_id) >= MAX_PENDING_TASKS_PER_USER:
+            _reject_task_locked(task, f"当前账号最多保留 {MAX_PENDING_TASKS_PER_USER} 个等待或运行中的任务。")
+            return None
         task["status"] = "queued"
         task["updated_at"] = _now()
         _queue.append((task_id, runner))
         _drain_queue_locked()
     return task_id
+
+
+def start_inline_task(task_id):
+    """Reserve queue capacity for a synchronous compatibility request."""
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            return False
+        user_id = _user_id(task)
+        if user_id and _pending_count_for_user(user_id, exclude_task_id=task_id) >= MAX_PENDING_TASKS_PER_USER:
+            _reject_task_locked(task, f"当前账号最多保留 {MAX_PENDING_TASKS_PER_USER} 个等待或运行中的任务。")
+            return False
+        if len(_running) >= max(1, GLOBAL_CONCURRENCY):
+            _reject_task_locked(task, "服务器训练并发已满，请稍后重试或使用异步队列。")
+            return False
+        if user_id and _running_count_for_user(user_id) >= max(1, USER_CONCURRENCY):
+            _reject_task_locked(task, "当前账号已有训练任务运行中，请稍后重试或使用异步队列。")
+            return False
+        _running.add(task_id)
+        task["status"] = "running"
+        task["updated_at"] = _now()
+        return True
 
 
 def _settle_cancelled_locked(task_id):
@@ -226,6 +274,13 @@ def list_tasks(limit=20, kind=None, user_id=None):
             items = [task for task in items if _user_id(task) == str(user_id)]
         items.sort(key=lambda task: task.get("created_at", 0), reverse=True)
         return [_public(task) for task in items[: max(1, min(int(limit or 20), 100))]]
+
+
+def pending_task_count(user_id=None):
+    with _lock:
+        if user_id is None:
+            return sum(1 for task in _tasks.values() if task.get("status") in {"queued", "running", "cancelling"})
+        return _pending_count_for_user(user_id)
 
 
 def clear_tasks():

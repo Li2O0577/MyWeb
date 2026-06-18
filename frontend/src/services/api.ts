@@ -121,6 +121,20 @@ export async function fetchDataProfile(sessionId: string, signal?: AbortSignal):
   return payload as DataUploadResponse;
 }
 
+export async function deleteDataSession(sessionId: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${API_BASE}/data/${sessionId}`, {
+    method: "DELETE",
+    credentials: REQUEST_CREDENTIALS,
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      payload?.error?.detail || payload?.error?.message || `删除 session 失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+}
+
 export async function fetchOutliers(sessionId: string, coefficient = 1.5, signal?: AbortSignal): Promise<OutlierMap> {
   const params = new URLSearchParams({ coefficient: String(coefficient) });
   const response = await fetch(`${API_BASE}/data/${sessionId}/outliers?${params.toString()}`, {

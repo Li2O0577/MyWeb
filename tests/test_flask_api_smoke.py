@@ -210,6 +210,63 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(own_profile_resp.status_code, 200, own_profile_resp.get_data(as_text=True))
         self.assertEqual(own_profile_resp.get_json()["session_id"], sid)
 
+        health_resp = self.client.get("/api/health")
+        self.assertEqual(health_resp.status_code, 200, health_resp.get_data(as_text=True))
+        recent = health_resp.get_json()["recent_sessions"][0]
+        self.assertEqual(recent["n_rows"], 2)
+        self.assertEqual(recent["n_cols"], 2)
+        self.assertEqual(health_resp.get_json()["resource_usage"]["active_sessions"], 1)
+        self.assertGreaterEqual(health_resp.get_json()["resource_limits"]["max_sessions_per_user"], 1)
+
+        forbidden_delete = other_client.delete(f"/api/data/{sid}")
+        self.assertEqual(forbidden_delete.status_code, 404)
+        delete_resp = self.client.delete(f"/api/data/{sid}")
+        self.assertEqual(delete_resp.status_code, 200, delete_resp.get_data(as_text=True))
+        self.assertEqual(delete_resp.get_json()["deleted"], sid)
+        self.assertEqual(self.client.get(f"/api/data/{sid}/profile").status_code, 404)
+
+    def test_login_failures_are_rate_limited(self):
+        client = self.backend_app.app.test_client()
+        with patch.object(self.auth_store, "LOGIN_MAX_FAILURES", 2), \
+             patch.object(self.auth_store, "LOGIN_WINDOW_SECONDS", 60), \
+             patch.object(self.auth_store, "LOGIN_LOCK_SECONDS", 30):
+            first = client.post("/api/auth/login", json={"username": "tester", "password": "wrong-pass"})
+            second = client.post("/api/auth/login", json={"username": "tester", "password": "wrong-pass"})
+            blocked = client.post("/api/auth/login", json={"username": "tester", "password": "password123"})
+
+        self.assertEqual(first.status_code, 401)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"]["code"], "LOGIN_RATE_LIMITED")
+        self.assertEqual(second.headers.get("Retry-After"), "30")
+        self.assertEqual(blocked.status_code, 429)
+
+    def test_registration_attempts_are_rate_limited(self):
+        client = self.backend_app.app.test_client()
+        with patch.object(self.auth_store, "REGISTER_MAX_ATTEMPTS", 1), \
+             patch.object(self.auth_store, "REGISTER_WINDOW_SECONDS", 60):
+            first = client.post("/api/auth/register", json={"username": "new_user_one", "password": "password123"})
+            second = client.post("/api/auth/register", json={"username": "new_user_two", "password": "password123"})
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"]["code"], "REGISTER_RATE_LIMITED")
+        self.assertEqual(second.headers.get("Retry-After"), "60")
+
+    def test_upload_resource_quotas_are_enforced(self):
+        with patch("routes.data_routes.MAX_SESSIONS_PER_USER", 1):
+            first = self._upload_csv("x,y\n1,2\n", filename="first.csv")
+            second = self._upload_csv("x,y\n3,4\n", filename="second.csv")
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"]["code"], "SESSION_QUOTA_EXCEEDED")
+
+        self.session_store._sessions.clear()
+        with patch("routes.data_routes.MAX_DATASET_ROWS", 2):
+            oversized = self._upload_csv("x,y\n1,2\n3,4\n5,6\n", filename="too_many_rows.csv")
+        self.assertEqual(oversized.status_code, 413)
+        self.assertEqual(oversized.get_json()["error"]["code"], "DATASET_ROW_LIMIT_EXCEEDED")
+
     def test_task_queue_cancel_and_task_visibility_are_user_scoped(self):
         gate = threading.Event()
         first = self.task_store.create_task(
@@ -248,6 +305,42 @@ class FlaskApiSmokeTests(unittest.TestCase):
         other_client, _other_user = self._make_authed_client("task_other")
         hidden_resp = other_client.get(f"/api/tasks/{first}")
         self.assertEqual(hidden_resp.status_code, 404)
+
+        gate.set()
+        first_done = self._wait_for_task(first)
+        self.assertEqual(first_done["status"], "succeeded", first_done)
+
+    def test_task_pending_quota_and_sync_capacity_are_enforced(self):
+        gate = threading.Event()
+        first = self.task_store.create_task(
+            "training",
+            "capacity holder",
+            metadata={"user_id": self.user["user_id"]},
+        )
+        self.task_store.submit_task(first, lambda: (gate.wait(2.0), {"version_id": "done"})[1])
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if self.task_store.get_task(first)["status"] == "running":
+                break
+            time.sleep(0.02)
+
+        with patch.object(self.task_store, "MAX_PENDING_TASKS_PER_USER", 1):
+            second = self.task_store.create_task(
+                "training",
+                "quota rejected",
+                metadata={"user_id": self.user["user_id"]},
+            )
+            self.assertIsNone(self.task_store.submit_task(second, lambda: {"version_id": "no"}))
+            self.assertEqual(self.task_store.get_task(second)["status"], "failed")
+
+        third = self.task_store.create_task(
+            "training",
+            "sync rejected",
+            metadata={"user_id": self.user["user_id"]},
+        )
+        self.assertFalse(self.task_store.start_inline_task(third))
+        self.assertEqual(self.task_store.get_task(third)["status"], "failed")
 
         gate.set()
         first_done = self._wait_for_task(first)

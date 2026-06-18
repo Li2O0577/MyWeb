@@ -152,6 +152,27 @@ def get_session_meta(sid, user_id=None):
     return dict(_sessions[sid]["meta"])
 
 
+def delete_session(sid, user_id=None):
+    if get_session(sid, user_id=user_id) is None:
+        return False
+    _sessions.pop(sid, None)
+    paths = list(_paths(sid))
+    try:
+        paths.extend(
+            os.path.join(SESSIONS_DIR, name)
+            for name in os.listdir(SESSIONS_DIR)
+            if name.startswith(f"{sid}.state.")
+        )
+    except FileNotFoundError:
+        pass
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    return True
+
+
 def update_session(sid, df, source_name=None, history_entry=None, user_id=None):
     if get_session(sid, user_id=user_id) is None:
         return False

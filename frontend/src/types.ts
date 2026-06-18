@@ -11,6 +11,8 @@ export interface AuthUser {
 export interface SessionMeta {
   session_id?: string;
   source_name?: string;
+  n_rows?: number;
+  n_cols?: number;
   rows?: number;
   n_columns?: number;
   updated_at_iso?: string;
@@ -96,6 +98,17 @@ export interface ProcessingHistory {
 export interface HealthResponse {
   status: "ok" | "degraded";
   active_sessions: number;
+  resource_usage?: {
+    active_sessions?: number;
+    pending_tasks?: number;
+  };
+  resource_limits?: {
+    max_sessions_per_user?: number;
+    max_pending_tasks_per_user?: number;
+    max_upload_mb?: number;
+    max_dataset_rows?: number;
+    max_dataset_columns?: number;
+  };
   recent_sessions: SessionMeta[];
   saved_models: SavedModels;
   error?: string;

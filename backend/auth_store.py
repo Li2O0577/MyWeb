@@ -12,6 +12,14 @@ import secrets
 import threading
 import time
 
+from resource_limits import (
+    LOGIN_LOCK_SECONDS,
+    LOGIN_MAX_FAILURES,
+    LOGIN_WINDOW_SECONDS,
+    REGISTER_MAX_ATTEMPTS,
+    REGISTER_WINDOW_SECONDS,
+)
+
 AUTH_DIR = os.path.join(os.path.dirname(__file__), "auth")
 USERS_PATH = os.path.join(AUTH_DIR, "users.json")
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -19,6 +27,9 @@ COOKIE_NAME = "myweb1_auth"
 
 _lock = threading.RLock()
 _sessions = {}
+_login_failures = {}
+_login_blocked_until = {}
+_registration_attempts = {}
 
 
 def _ensure_dir():
@@ -100,6 +111,62 @@ def verify_user(username, password):
     return _public_user(user)
 
 
+def login_retry_after(key):
+    """Return remaining lock seconds for a client/user login key."""
+    now = time.time()
+    with _lock:
+        blocked_until = float(_login_blocked_until.get(key, 0))
+        if blocked_until <= now:
+            _login_blocked_until.pop(key, None)
+            return 0
+        return max(1, int(blocked_until - now + 0.999))
+
+
+def record_login_failure(key):
+    """Record one failed login and return lock seconds when the limit is hit."""
+    now = time.time()
+    cutoff = now - LOGIN_WINDOW_SECONDS
+    with _lock:
+        failures = [stamp for stamp in _login_failures.get(key, []) if stamp >= cutoff]
+        failures.append(now)
+        _login_failures[key] = failures
+        if len(failures) < LOGIN_MAX_FAILURES:
+            return 0
+        _login_failures.pop(key, None)
+        _login_blocked_until[key] = now + LOGIN_LOCK_SECONDS
+        return LOGIN_LOCK_SECONDS
+
+
+def clear_login_failures(key):
+    with _lock:
+        _login_failures.pop(key, None)
+        _login_blocked_until.pop(key, None)
+
+
+def registration_retry_after(key):
+    """Return seconds until this source may attempt another registration."""
+    now = time.time()
+    cutoff = now - REGISTER_WINDOW_SECONDS
+    with _lock:
+        attempts = [stamp for stamp in _registration_attempts.get(key, []) if stamp >= cutoff]
+        if attempts:
+            _registration_attempts[key] = attempts
+        else:
+            _registration_attempts.pop(key, None)
+        if len(attempts) < REGISTER_MAX_ATTEMPTS:
+            return 0
+        return max(1, int(attempts[0] + REGISTER_WINDOW_SECONDS - now + 0.999))
+
+
+def record_registration_attempt(key):
+    now = time.time()
+    cutoff = now - REGISTER_WINDOW_SECONDS
+    with _lock:
+        attempts = [stamp for stamp in _registration_attempts.get(key, []) if stamp >= cutoff]
+        attempts.append(now)
+        _registration_attempts[key] = attempts
+
+
 def create_session(user):
     token = secrets.token_urlsafe(32)
     now = time.time()
@@ -135,3 +202,6 @@ def delete_session(token):
 def clear_auth_state():
     with _lock:
         _sessions.clear()
+        _login_failures.clear()
+        _login_blocked_until.clear()
+        _registration_attempts.clear()

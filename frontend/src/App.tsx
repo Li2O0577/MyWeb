@@ -17,11 +17,13 @@ import {
   Settings2,
   Sparkles,
   Table2,
+  Trash2,
   Upload,
   Wand2
 } from "lucide-react";
 import {
   API_BASE,
+  deleteDataSession,
   fetchDataProfile,
   fetchHealth,
   fetchMe,
@@ -240,8 +242,10 @@ function modelRows(savedModels: SavedModels | undefined) {
 }
 
 function formatSession(session: SessionMeta) {
-  const rows = typeof session.rows === "number" ? `${session.rows.toLocaleString()} 行` : "行数未知";
-  const cols = typeof session.n_columns === "number" ? `${session.n_columns} 列` : "列数未知";
+  const rowCount = session.n_rows ?? session.rows;
+  const columnCount = session.n_cols ?? session.n_columns;
+  const rows = typeof rowCount === "number" ? `${rowCount.toLocaleString()} 行` : "行数未知";
+  const cols = typeof columnCount === "number" ? `${columnCount} 列` : "列数未知";
   return `${rows} · ${cols}`;
 }
 
@@ -303,6 +307,8 @@ function App() {
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1");
   const [activeView, setActiveView] = useState<ViewId>(() => initialView());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -461,6 +467,27 @@ function App() {
     }
   };
 
+  const removeSession = async (session: SessionMeta) => {
+    const sessionId = session.session_id;
+    if (!sessionId) return;
+    const name = session.source_name || sessionId;
+    if (!window.confirm(`确定删除数据 session“${name}”吗？相关处理历史也会被删除。`)) return;
+    setDeletingSessionId(sessionId);
+    setSessionError("");
+    try {
+      await deleteDataSession(sessionId);
+      if (profile?.session_id === sessionId) {
+        setProfile(null);
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+      setRefreshToken((value) => value + 1);
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : "删除 session 失败");
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
   const handleProfileChange = (payload: DataProfile) => {
     setProfile(payload);
     localStorage.setItem(SESSION_STORAGE_KEY, payload.session_id);
@@ -577,7 +604,7 @@ function App() {
               >
                 <FileSpreadsheet size={22} aria-hidden="true" />
                 <strong>{uploading ? "正在上传..." : "选择数据文件"}</strong>
-                <span>支持 .csv、.xlsx、.xls，最大限制沿用后端 256 MB。</span>
+                <span>支持 .csv、.xlsx、.xls；默认最大 256 MB，实际限制由服务器配置。</span>
               </button>
               {uploadError ? <div className="inline-error">{uploadError}</div> : null}
               {backendStatus === "offline" ? (
@@ -625,7 +652,9 @@ function App() {
             </div>
             <div className="status-card">
               <span>活跃会话</span>
-              <strong>{health?.active_sessions ?? "-"}</strong>
+              <strong>
+                {health ? `${health.active_sessions} / ${health.resource_limits?.max_sessions_per_user ?? "-"}` : "-"}
+              </strong>
               <small>{recentSession?.source_name ? `最近数据：${recentSession.source_name}` : "暂无最近数据"}</small>
             </div>
             <div className="status-card">
@@ -751,21 +780,33 @@ function App() {
                 <h2>最近 session</h2>
               </div>
               <div className="session-list">
+                {sessionError ? <div className="inline-error">{sessionError}</div> : null}
                 {health?.recent_sessions?.length ? (
                   health.recent_sessions.slice(0, 4).map((session) => (
-                    <button
-                      className="session-row"
-                      key={session.session_id ?? session.updated_at_iso}
-                      type="button"
-                      disabled={!session.session_id || profileLoading}
-                      onClick={() => restoreSession(session.session_id)}
-                    >
-                      <div>
-                        <strong>{session.source_name ?? "unknown"}</strong>
-                        <span>{formatSession(session)}</span>
-                      </div>
-                      <code>{session.session_id ?? "-"}</code>
-                    </button>
+                    <div className="session-row-shell" key={session.session_id ?? session.updated_at_iso}>
+                      <button
+                        className="session-row"
+                        type="button"
+                        disabled={!session.session_id || profileLoading || deletingSessionId === session.session_id}
+                        onClick={() => restoreSession(session.session_id)}
+                      >
+                        <div>
+                          <strong>{session.source_name ?? "unknown"}</strong>
+                          <span>{formatSession(session)}</span>
+                        </div>
+                        <code>{session.session_id ?? "-"}</code>
+                      </button>
+                      <button
+                        className="icon-button session-delete"
+                        type="button"
+                        disabled={!session.session_id || deletingSessionId === session.session_id}
+                        aria-label={`删除 session ${session.source_name ?? session.session_id ?? ""}`}
+                        title="删除 session"
+                        onClick={() => removeSession(session)}
+                      >
+                        <Trash2 size={15} aria-hidden="true" />
+                      </button>
+                    </div>
                   ))
                 ) : (
                   <div className="empty-list">暂无后端 session。上传数据后会出现在这里。</div>
