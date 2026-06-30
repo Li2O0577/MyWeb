@@ -71,6 +71,7 @@ from routes.decision_tree_routes import dt_bp
 from routes.clustering_routes import cluster_bp
 from routes.llm_routes import llm_bp
 from routes.task_routes import task_bp
+from routes.admin_routes import admin_bp
 
 app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(data_bp, url_prefix="/api/data")
@@ -81,6 +82,7 @@ app.register_blueprint(dt_bp, url_prefix="/api/decision_tree")
 app.register_blueprint(cluster_bp, url_prefix="/api/clustering")
 app.register_blueprint(llm_bp, url_prefix="/api/llm")
 app.register_blueprint(task_bp, url_prefix="/api/tasks")
+app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
 
 @app.before_request
@@ -187,7 +189,7 @@ def not_found(_err):
 def too_large(_err):
     return api_error(
         "PAYLOAD_TOO_LARGE",
-        "上传文件超过 256 MB 限制",
+        f"上传文件超过 {MAX_UPLOAD_MB} MB 限制",
         413,
         detail="请先压缩、拆分文件，或减少数据量后再上传。",
     )

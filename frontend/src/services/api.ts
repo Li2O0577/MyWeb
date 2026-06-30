@@ -1,9 +1,12 @@
 import type {
   ApiJson,
+  AuditLogEntry,
   AuthUser,
   DataUploadResponse,
+  DataRowsResponse,
   HealthResponse,
   LlmStreamEvent,
+  ManagedUser,
   ModelType,
   ModelVersionsResponse,
   OutlierMap,
@@ -66,6 +69,41 @@ export async function logout(signal?: AbortSignal): Promise<void> {
   });
 }
 
+export async function fetchAdminUsers(signal?: AbortSignal): Promise<ManagedUser[]> {
+  const response = await fetch(`${API_BASE}/admin/users`, { signal, credentials: REQUEST_CREDENTIALS });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(authMessage(payload, `读取账号列表失败：HTTP ${response.status}`));
+  return (payload as { users?: ManagedUser[] }).users ?? [];
+}
+
+export async function updateAdminUser(
+  userId: string,
+  changes: { role?: "admin" | "user"; disabled?: boolean },
+  signal?: AbortSignal
+): Promise<AuthUser> {
+  const response = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+    credentials: REQUEST_CREDENTIALS,
+    signal
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(authMessage(payload, `更新账号失败：HTTP ${response.status}`));
+  return (payload as { user: AuthUser }).user;
+}
+
+export async function fetchAuditLogs(limit = 100, signal?: AbortSignal): Promise<AuditLogEntry[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(`${API_BASE}/admin/audit-logs?${params.toString()}`, {
+    signal,
+    credentials: REQUEST_CREDENTIALS
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(authMessage(payload, `读取审计日志失败：HTTP ${response.status}`));
+  return (payload as { audit_logs?: AuditLogEntry[] }).audit_logs ?? [];
+}
+
 function emitTrainingTaskEvent(
   modelType: ModelType,
   phase: "started" | "settled",
@@ -119,6 +157,25 @@ export async function fetchDataProfile(sessionId: string, signal?: AbortSignal):
     throw new Error(message);
   }
   return payload as DataUploadResponse;
+}
+
+export async function fetchDataRows(
+  sessionId: string,
+  page = 1,
+  pageSize = 100,
+  signal?: AbortSignal
+): Promise<DataRowsResponse> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  const response = await fetch(`${API_BASE}/data/${sessionId}/rows?${params.toString()}`, {
+    signal,
+    credentials: REQUEST_CREDENTIALS
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.error?.detail || payload?.error?.message || `读取完整数据失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as DataRowsResponse;
 }
 
 export async function deleteDataSession(sessionId: string, signal?: AbortSignal): Promise<void> {

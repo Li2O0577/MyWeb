@@ -10,6 +10,8 @@ import types
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+
 
 MODEL_TYPES = ("decision_tree", "clustering", "regression", "classification", "diy_mlp")
 
@@ -105,12 +107,14 @@ class FlaskApiSmokeTests(unittest.TestCase):
 
         import app as backend_app
         import auth_store
+        import database
         import models.registry as registry
         import session_store
         import task_store
 
         cls.backend_app = backend_app
         cls.auth_store = auth_store
+        cls.database = database
         cls.registry = registry
         cls.session_store = session_store
         cls.task_store = task_store
@@ -120,18 +124,21 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.sessions_dir = os.path.join(self.tmpdir, "sessions")
         self.models_dir = os.path.join(self.tmpdir, "models")
         self.auth_dir = os.path.join(self.tmpdir, "auth")
+        self.runtime_dir = os.path.join(self.tmpdir, "runtime")
         os.makedirs(self.sessions_dir, exist_ok=True)
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.auth_dir, exist_ok=True)
 
         self.old_auth_dir = self.auth_store.AUTH_DIR
         self.old_users_path = self.auth_store.USERS_PATH
+        self.old_db_path = self.database.DB_PATH
         self.old_sessions_dir = self.session_store.SESSIONS_DIR
         self.old_models_dir = self.registry.MODELS_DIR
         self.old_registry_path = self.registry.REGISTRY_PATH
 
         self.auth_store.AUTH_DIR = self.auth_dir
         self.auth_store.USERS_PATH = os.path.join(self.auth_dir, "users.json")
+        self.database.DB_PATH = os.path.join(self.runtime_dir, "myweb1.db")
         self.session_store.SESSIONS_DIR = self.sessions_dir
         self.registry.MODELS_DIR = self.models_dir
         self.registry.REGISTRY_PATH = os.path.join(self.models_dir, "registry.json")
@@ -152,6 +159,7 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.task_store.clear_tasks()
         self.auth_store.AUTH_DIR = self.old_auth_dir
         self.auth_store.USERS_PATH = self.old_users_path
+        self.database.DB_PATH = self.old_db_path
         self.session_store.SESSIONS_DIR = self.old_sessions_dir
         self.registry.MODELS_DIR = self.old_models_dir
         self.registry.REGISTRY_PATH = self.old_registry_path
@@ -224,6 +232,188 @@ class FlaskApiSmokeTests(unittest.TestCase):
         self.assertEqual(delete_resp.status_code, 200, delete_resp.get_data(as_text=True))
         self.assertEqual(delete_resp.get_json()["deleted"], sid)
         self.assertEqual(self.client.get(f"/api/data/{sid}/profile").status_code, 404)
+
+    def test_data_rows_endpoint_paginates_all_rows_and_columns(self):
+        rows = ["x,y,label"] + [f"{index},{index * 2},row-{index}" for index in range(205)]
+        upload_resp = self._upload_csv("\n".join(rows), filename="paged.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        page_resp = self.client.get(f"/api/data/{sid}/rows?page=3&page_size=100")
+        self.assertEqual(page_resp.status_code, 200, page_resp.get_data(as_text=True))
+        payload = page_resp.get_json()
+        self.assertEqual(payload["columns"], ["x", "y", "label"])
+        self.assertEqual(payload["total_rows"], 205)
+        self.assertEqual(payload["total_pages"], 3)
+        self.assertEqual(len(payload["rows"]), 5)
+        self.assertEqual(payload["rows"][0]["label"], "row-200")
+
+        overflow_resp = self.client.get(f"/api/data/{sid}/rows?page=999&page_size=100")
+        self.assertEqual(overflow_resp.status_code, 200, overflow_resp.get_data(as_text=True))
+        self.assertEqual(overflow_resp.get_json()["page"], 3)
+        self.assertEqual(len(overflow_resp.get_json()["rows"]), 5)
+
+        invalid = self.client.get(f"/api/data/{sid}/rows?page=0&page_size=100")
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.get_json()["error"]["code"], "INVALID_PAGINATION")
+
+    def test_upload_preview_serializes_missing_and_infinite_values_as_null(self):
+        response = self._upload_csv("x,y\n1,\n2,inf\n", filename="UPPER.CSV")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIsNone(payload["preview"][0]["y"])
+        self.assertIsNone(payload["preview"][1]["y"])
+        self.assertEqual(payload["column_profiles"][1]["missing_count"], 2)
+        self.assertNotIn(":NaN", response.get_data(as_text=True))
+        self.assertNotIn(":Infinity", response.get_data(as_text=True))
+
+    def test_sync_uses_upload_limits_and_updates_session(self):
+        upload_resp = self._upload_csv("x,y\n1,2\n", filename="initial.csv")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.get_data(as_text=True))
+        sid = upload_resp.get_json()["session_id"]
+
+        sync_resp = self.client.post(
+            f"/api/data/{sid}/sync",
+            data={"file": (io.BytesIO(b"x,y\n3,4\n5,6\n"), "UPDATED.CSV")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(sync_resp.status_code, 200, sync_resp.get_data(as_text=True))
+        self.assertEqual(sync_resp.get_json()["n_rows"], 2)
+        profile_resp = self.client.get(f"/api/data/{sid}/profile")
+        self.assertEqual(profile_resp.get_json()["session_meta"]["source_name"], "UPDATED.CSV")
+
+        process_resp = self.client.post(f"/api/data/{sid}/process", json={
+            "operations": [{"op": "drop_rows", "positions": [1]}]
+        })
+        self.assertEqual(process_resp.status_code, 200, process_resp.get_data(as_text=True))
+        undo_resp = self.client.post(f"/api/data/{sid}/undo", json={})
+        self.assertEqual(undo_resp.status_code, 200, undo_resp.get_data(as_text=True))
+        self.assertEqual(undo_resp.get_json()["n_rows"], 2)
+        self.assertEqual(undo_resp.get_json()["preview"][0]["x"], 3)
+
+        with patch("routes.data_routes.MAX_DATASET_ROWS", 1):
+            rejected = self.client.post(
+                f"/api/data/{sid}/sync",
+                data={"file": (io.BytesIO(b"x,y\n1,2\n3,4\n"), "too_many.csv")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(rejected.status_code, 413)
+        self.assertEqual(rejected.get_json()["error"]["code"], "DATASET_ROW_LIMIT_EXCEEDED")
+
+    def test_session_store_rejects_path_like_ids(self):
+        outside_data = os.path.join(self.tmpdir, "outside.pkl")
+        outside_meta = os.path.join(self.tmpdir, "outside.meta.json")
+        pd.DataFrame({"secret": [1]}).to_pickle(outside_data)
+        with open(outside_meta, "w", encoding="utf-8") as fh:
+            json.dump({"user_id": self.user["user_id"]}, fh)
+
+        loaded = self.session_store.get_session("../outside", user_id=self.user["user_id"])
+
+        self.assertIsNone(loaded)
+        self.assertNotIn("../outside", self.session_store._sessions)
+
+    def test_history_pruning_removes_discarded_state_files(self):
+        sid = self.session_store.create_session(
+            pd.DataFrame({"x": [0]}), user_id=self.user["user_id"]
+        )
+        for value in range(1, 52):
+            self.session_store.update_session(
+                sid,
+                pd.DataFrame({"x": [value]}),
+                user_id=self.user["user_id"],
+                history_entry={"label": f"step {value}"},
+            )
+
+        history = self.session_store.processing_history(sid, user_id=self.user["user_id"])
+        self.assertEqual(len(history["history"]), 50)
+        state_files = [
+            name for name in os.listdir(self.sessions_dir)
+            if name.startswith(f"{sid}.state.")
+        ]
+        self.assertEqual(len(state_files), 50)
+
+        self.session_store.undo_session(sid, user_id=self.user["user_id"])
+        discarded_state_id = history["history"][-1]["state_id"]
+        self.session_store.update_session(
+            sid,
+            pd.DataFrame({"x": [999]}),
+            user_id=self.user["user_id"],
+            history_entry={"label": "branched"},
+        )
+        self.assertFalse(os.path.exists(
+            self.session_store._state_path(sid, discarded_state_id)
+        ))
+
+    def test_account_and_cookie_session_are_persisted_in_sqlite(self):
+        with self.database.connect() as connection:
+            user_row = connection.execute(
+                "SELECT username FROM users WHERE user_id = ?", (self.user["user_id"],)
+            ).fetchone()
+            session_count = connection.execute(
+                "SELECT COUNT(*) FROM auth_sessions WHERE user_id = ?", (self.user["user_id"],)
+            ).fetchone()[0]
+
+        self.assertEqual(user_row["username"], "tester")
+        self.assertEqual(session_count, 1)
+        health_resp = self.client.get("/api/health")
+        self.assertEqual(health_resp.status_code, 200, health_resp.get_data(as_text=True))
+        self.assertEqual(health_resp.get_json()["user"]["user_id"], self.user["user_id"])
+        self.assertEqual(self.user["role"], "admin")
+
+    def test_legacy_json_accounts_are_imported_into_sqlite(self):
+        secret = self.auth_store._password_hash("password123")
+        with open(self.auth_store.USERS_PATH, "w", encoding="utf-8") as fh:
+            json.dump({
+                "users": {
+                    "legacy_user": {
+                        "user_id": "legacy-user-id",
+                        "username": "legacy_user",
+                        "password_salt": secret["salt"],
+                        "password_hash": secret["hash"],
+                        "created_at": 123.0,
+                    }
+                }
+            }, fh)
+
+        legacy = self.auth_store.verify_user("legacy_user", "password123")
+        self.assertIsNotNone(legacy)
+        self.assertEqual(legacy["user_id"], "legacy-user-id")
+
+    def test_admin_can_manage_accounts_and_read_audit_logs(self):
+        other_client, other_user = self._make_authed_client("managed_user")
+        self.assertEqual(other_user["role"], "user")
+
+        denied = other_client.get("/api/admin/users")
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.get_json()["error"]["code"], "ADMIN_REQUIRED")
+
+        users_resp = self.client.get("/api/admin/users")
+        self.assertEqual(users_resp.status_code, 200, users_resp.get_data(as_text=True))
+        users = users_resp.get_json()["users"]
+        self.assertEqual(len(users), 2)
+
+        disable_resp = self.client.patch(
+            f"/api/admin/users/{other_user['user_id']}", json={"disabled": True}
+        )
+        self.assertEqual(disable_resp.status_code, 200, disable_resp.get_data(as_text=True))
+        self.assertTrue(disable_resp.get_json()["user"]["disabled"])
+        self.assertEqual(other_client.get("/api/health").status_code, 401)
+
+        logs_resp = self.client.get("/api/admin/audit-logs?limit=20")
+        self.assertEqual(logs_resp.status_code, 200, logs_resp.get_data(as_text=True))
+        actions = [item["action"] for item in logs_resp.get_json()["audit_logs"]]
+        self.assertIn("admin.user_access_updated", actions)
+
+    def test_admin_cannot_disable_or_demote_current_account(self):
+        disable_resp = self.client.patch(
+            f"/api/admin/users/{self.user['user_id']}", json={"disabled": True}
+        )
+        demote_resp = self.client.patch(
+            f"/api/admin/users/{self.user['user_id']}", json={"role": "user"}
+        )
+        self.assertEqual(disable_resp.status_code, 400)
+        self.assertEqual(demote_resp.status_code, 400)
+        self.assertEqual(disable_resp.get_json()["error"]["code"], "SELF_ACCESS_CHANGE_DENIED")
 
     def test_login_failures_are_rate_limited(self):
         client = self.backend_app.app.test_client()
@@ -345,6 +535,24 @@ class FlaskApiSmokeTests(unittest.TestCase):
         gate.set()
         first_done = self._wait_for_task(first)
         self.assertEqual(first_done["status"], "succeeded", first_done)
+
+    def test_task_history_is_restored_and_interrupted_work_is_failed(self):
+        finished = self.task_store.create_task(
+            "training", "finished", metadata={"user_id": self.user["user_id"]}
+        )
+        self.task_store.finish_task(finished, {"version_id": "persisted-version"})
+        interrupted = self.task_store.create_task(
+            "training", "interrupted", metadata={"user_id": self.user["user_id"]}
+        )
+
+        self.task_store._tasks.clear()
+        restored_count = self.task_store.restore_tasks()
+
+        self.assertEqual(restored_count, 2)
+        self.assertEqual(self.task_store.get_task(finished)["status"], "succeeded")
+        interrupted_task = self.task_store.get_task(interrupted)
+        self.assertEqual(interrupted_task["status"], "failed")
+        self.assertIn("服务重启", interrupted_task["error"])
 
     def test_upload_train_predict_decision_tree_regression(self):
         rows = ["x1,x2,y"]

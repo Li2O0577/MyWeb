@@ -6,6 +6,24 @@ export interface AuthUser {
   user_id: string;
   username: string;
   created_at?: number;
+  role: "admin" | "user";
+  disabled?: boolean;
+}
+
+export interface ManagedUser extends AuthUser {
+  active_sessions: number;
+}
+
+export interface AuditLogEntry {
+  audit_id: number;
+  created_at: number;
+  action: string;
+  actor_user_id?: string | null;
+  actor_username?: string | null;
+  target_user_id?: string | null;
+  target_username?: string | null;
+  source_ip?: string | null;
+  details: Record<string, unknown>;
 }
 
 export interface SessionMeta {
@@ -115,6 +133,16 @@ export interface HealthResponse {
 }
 
 export type DataUploadResponse = DataProfile;
+
+export interface DataRowsResponse {
+  session_id: string;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  page: number;
+  page_size: number;
+  total_rows: number;
+  total_pages: number;
+}
 
 export type ModelType = "decision_tree" | "clustering" | "regression" | "classification" | "diy_mlp";
 

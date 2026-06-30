@@ -1,6 +1,7 @@
 """In-memory session registry with lightweight disk persistence."""
 import json
 import os
+import re
 import time
 import uuid
 
@@ -10,6 +11,16 @@ SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 SESSION_TTL_SECONDS = 24 * 60 * 60
 
 _sessions = {}
+_SESSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_STATE_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _valid_session_id(sid):
+    return bool(_SESSION_ID_RE.fullmatch(str(sid or "")))
+
+
+def _valid_state_id(state_id):
+    return bool(_STATE_ID_RE.fullmatch(str(state_id or "")))
 
 
 def _ensure_dir():
@@ -17,6 +28,8 @@ def _ensure_dir():
 
 
 def _paths(sid):
+    if not _valid_session_id(sid):
+        raise ValueError("Invalid session id")
     return (
         os.path.join(SESSIONS_DIR, f"{sid}.pkl"),
         os.path.join(SESSIONS_DIR, f"{sid}.meta.json"),
@@ -24,6 +37,8 @@ def _paths(sid):
 
 
 def _state_path(sid, state_id):
+    if not _valid_session_id(sid) or not _valid_state_id(state_id):
+        raise ValueError("Invalid session state id")
     return os.path.join(SESSIONS_DIR, f"{sid}.state.{state_id}.pkl")
 
 
@@ -84,8 +99,12 @@ def _ensure_history(sid):
         index = int(meta.get("history_index", len(history) - 1))
         meta["history_index"] = max(0, min(index, len(history) - 1))
         current = meta["history"][meta["history_index"]]
-        if current.get("state_id") and not os.path.exists(_state_path(sid, current["state_id"])):
-            _write_state(sid, current["state_id"], record["df"])
+        state_id = current.get("state_id")
+        if not _valid_state_id(state_id):
+            state_id = _new_state_id()
+            current["state_id"] = state_id
+        if not os.path.exists(_state_path(sid, state_id)):
+            _write_state(sid, state_id, record["df"])
             _write_session(sid)
     return meta
 
@@ -121,6 +140,8 @@ def create_session(df, source_name="", user_id=None):
 
 
 def get_session(sid, user_id=None):
+    if not _valid_session_id(sid):
+        return None
     record = _sessions.get(sid)
     if record:
         if not _owns_session(record["meta"], user_id):
@@ -188,6 +209,7 @@ def update_session(sid, df, source_name=None, history_entry=None, user_id=None):
     if history_entry:
         history = list(meta.get("history") or [])
         current_index = int(meta.get("history_index", len(history) - 1))
+        discarded_history = history[current_index + 1:]
         history = history[: current_index + 1]
         state_id = _new_state_id()
         label = str(history_entry.get("label") or "数据处理")
@@ -195,8 +217,27 @@ def update_session(sid, df, source_name=None, history_entry=None, user_id=None):
         messages = history_entry.get("messages") or []
         _write_state(sid, state_id, df)
         history.append(_state_entry(state_id, df, label, operations, messages))
+        removed_history = discarded_history + history[:-50]
         meta["history"] = history[-50:]
         meta["history_index"] = len(meta["history"]) - 1
+        for entry in removed_history:
+            removed_state_id = entry.get("state_id")
+            if not _valid_state_id(removed_state_id):
+                continue
+            try:
+                os.remove(_state_path(sid, removed_state_id))
+            except FileNotFoundError:
+                pass
+    else:
+        history = meta.get("history") or []
+        current_index = int(meta.get("history_index", len(history) - 1)) if history else -1
+        if 0 <= current_index < len(history):
+            current_entry = history[current_index]
+            current_entry["n_rows"] = int(len(df))
+            current_entry["n_cols"] = int(len(df.columns))
+            current_entry["created_at"] = time.time()
+            if current_entry.get("state_id"):
+                _write_state(sid, current_entry["state_id"], df)
 
     _sessions[sid] = {"df": df.copy(), "meta": meta}
     _write_session(sid)
@@ -226,8 +267,10 @@ def _restore_history_state(sid, target_index, user_id=None):
     if target_index < 0 or target_index >= len(history):
         return None
     state_id = history[target_index].get("state_id")
+    if not _valid_state_id(state_id):
+        return None
     path = _state_path(sid, state_id)
-    if not state_id or not os.path.exists(path):
+    if not os.path.exists(path):
         return None
     df = pd.read_pickle(path)
     meta["history_index"] = target_index

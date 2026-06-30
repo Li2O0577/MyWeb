@@ -1,5 +1,6 @@
 """Data upload & processing API routes."""
 import logging
+import math
 from flask import Blueprint, request, jsonify
 from routes._auth import current_user_id
 from routes._responses import api_error, session_expired
@@ -166,6 +167,35 @@ def get_profile(sid):
     return jsonify(_profile_response(df, sid))
 
 
+@data_bp.route("/<sid>/rows", methods=["GET"])
+def get_rows(sid):
+    """Return a bounded page of all columns from the current session data."""
+    df = get_session(sid, user_id=current_user_id())
+    if df is None:
+        return session_expired()
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 100))
+    except (TypeError, ValueError):
+        return api_error("INVALID_PAGINATION", "page 和 page_size 必须是整数。", 400)
+    if page < 1 or page_size < 1 or page_size > 500:
+        return api_error("INVALID_PAGINATION", "page 至少为 1，page_size 需要在 1 到 500 之间。", 400)
+    total_rows = int(len(df))
+    total_pages = max(1, math.ceil(total_rows / page_size))
+    page = min(page, total_pages)
+    start = (page - 1) * page_size
+    page_df = df.iloc[start:start + page_size]
+    return jsonify({
+        "session_id": sid,
+        "columns": [str(column) for column in df.columns],
+        "rows": serialize_preview(page_df, rows=page_size),
+        "page": page,
+        "page_size": page_size,
+        "total_rows": total_rows,
+        "total_pages": total_pages,
+    })
+
+
 @data_bp.route("/<sid>/history", methods=["GET"])
 def get_processing_history(sid):
     """Return processing history, undo/redo state, and saved pipelines."""
@@ -281,23 +311,35 @@ def sync_data(sid):
         return api_error("NO_FILE", "没有收到同步文件", 400, "请在 file 表单字段中上传当前数据的 CSV 内容。")
     file = request.files['file']
     cl = request.content_length
-    if cl is not None and cl > MAX_FILE_SIZE:
+    if cl is not None and cl > MAX_UPLOAD_BYTES:
         return api_error(
             "FILE_TOO_LARGE",
-            f"同步文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 256 MB。",
+            f"同步文件过大（约 {cl / 1024 / 1024:.0f} MB），最大允许 {MAX_UPLOAD_MB} MB。",
             413,
             detail="请减少数据量后再同步。",
         )
     try:
         file_bytes = file.read()
-        if len(file_bytes) > MAX_FILE_SIZE:
+        if len(file_bytes) > MAX_UPLOAD_BYTES:
             return api_error(
                 "FILE_TOO_LARGE",
-                f"同步文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 256 MB。",
+                f"同步文件过大（约 {len(file_bytes) / 1024 / 1024:.0f} MB），最大允许 {MAX_UPLOAD_MB} MB。",
                 413,
                 detail="请减少数据量后再同步。",
             )
         df = parse_file(file_bytes, file.filename)
+        if len(df) > MAX_DATASET_ROWS:
+            return api_error(
+                "DATASET_ROW_LIMIT_EXCEEDED",
+                f"数据集包含 {len(df):,} 行，单个数据集最多允许 {MAX_DATASET_ROWS:,} 行。",
+                413,
+            )
+        if len(df.columns) > MAX_DATASET_COLUMNS:
+            return api_error(
+                "DATASET_COLUMN_LIMIT_EXCEEDED",
+                f"数据集包含 {len(df.columns):,} 列，单个数据集最多允许 {MAX_DATASET_COLUMNS:,} 列。",
+                413,
+            )
         if not update_session(sid, df, source_name=file.filename, user_id=current_user_id()):
             return session_expired()
         return jsonify({

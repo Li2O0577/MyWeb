@@ -7,12 +7,14 @@ import numpy as np
 
 def parse_file(file_bytes, filename):
     """Parse uploaded CSV/Excel into a DataFrame."""
-    if filename.endswith('.csv'):
-        return pd.read_csv(io.BytesIO(file_bytes))
-    elif filename.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(io.BytesIO(file_bytes))
+    normalized_name = str(filename or "").lower()
+    if normalized_name.endswith('.csv'):
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    elif normalized_name.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(io.BytesIO(file_bytes))
     else:
         raise ValueError(f"不支持的文件格式: {filename}。请上传 CSV (.csv) 或 Excel (.xlsx) 文件。")
+    return df.replace([np.inf, -np.inf], np.nan)
 
 
 _ALLOWED_EXPR_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
@@ -596,25 +598,39 @@ def serialize_preview(df, rows=100):
     preview = df.head(rows).copy()
     for col in preview.select_dtypes(include=['datetime64', 'datetimetz']).columns:
         preview[col] = preview[col].astype(str)
-    # Convert any remaining non-serializable types
-    for col in preview.columns:
-        if preview[col].dtype == 'object':
-            preview[col] = preview[col].apply(lambda x: str(x) if not isinstance(x, (str, int, float, bool, type(None), list, dict)) else x)
     records = preview.to_dict(orient="records")
 
-    # Ensure all values are JSON-serializable (numpy scalars survive to_dict)
-    for row in records:
-        for k, v in row.items():
-            if isinstance(v, (np.integer,)):
-                row[k] = int(v)
-            elif isinstance(v, (np.floating,)):
-                row[k] = float(v)
-            elif isinstance(v, (np.bool_,)):
-                row[k] = bool(v)
-            elif isinstance(v, np.ndarray):
-                row[k] = v.tolist()
+    def json_safe(value):
+        # Browser JSON.parse rejects NaN/Infinity even though Python's encoder accepts them.
+        if value is None:
+            return None
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, (float, np.floating)):
+            numeric = float(value)
+            return numeric if np.isfinite(numeric) else None
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, np.ndarray):
+            return [json_safe(item) for item in value.tolist()]
+        if isinstance(value, (list, tuple, set)):
+            return [json_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): json_safe(item) for key, item in value.items()}
+        try:
+            missing = pd.isna(value)
+            if isinstance(missing, (bool, np.bool_)) and missing:
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(value)
 
-    return records
+    return [
+        {str(key): json_safe(value) for key, value in record.items()}
+        for record in records
+    ]
 
 
 def build_data_profile(df, session_id=None, session_meta=None, preview_rows=100):

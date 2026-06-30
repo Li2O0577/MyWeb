@@ -24,3 +24,16 @@ def require_auth(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def require_admin(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = current_user()
+        if not user:
+            return api_error("UNAUTHENTICATED", "请先登录。", 401)
+        if user.get("role") != "admin":
+            return api_error("ADMIN_REQUIRED", "此操作仅限管理员。", 403)
+        return fn(*args, **kwargs)
+
+    return wrapper

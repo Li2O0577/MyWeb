@@ -1,11 +1,9 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import {
-  Activity,
   AlertTriangle,
   BarChart3,
   Brain,
   CheckCircle2,
-  ChevronRight,
   Database,
   FileSpreadsheet,
   GitBranch,
@@ -15,6 +13,7 @@ import {
   Play,
   RefreshCcw,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Table2,
   Trash2,
@@ -37,13 +36,15 @@ import DataProcessingWorkspace from "./components/DataProcessingWorkspace";
 import DataVisualization from "./components/DataVisualization";
 import LlmWorkspace from "./components/LlmWorkspace";
 import ModelWorkbench from "./components/ModelWorkbench";
+import AdminWorkspace from "./components/AdminWorkspace";
+import DataRowsBrowser from "./components/DataRowsBrowser";
 
 const SESSION_STORAGE_KEY = "indeterminate.currentSessionId";
 const SIDEBAR_STORAGE_KEY = "indeterminate.sidebarCollapsed";
 
-type ViewId = "home" | "upload" | "preview" | "process" | "visualize" | "model" | "llm";
+type ViewId = "home" | "upload" | "preview" | "process" | "visualize" | "model" | "llm" | "admin";
 
-const viewIds = new Set<ViewId>(["home", "upload", "preview", "process", "visualize", "model", "llm"]);
+const viewIds = new Set<ViewId>(["home", "upload", "preview", "process", "visualize", "model", "llm", "admin"]);
 
 const navItems = [
   { id: "home", label: "工作台", detail: "Overview", icon: Sparkles },
@@ -90,6 +91,11 @@ const viewCopy: Record<ViewId, { eyebrow: string; title: string; description: st
     eyebrow: "LLM analysis",
     title: "大模型分析",
     description: "使用 Direct Chat 或 Agent Chat 进行流式数据分析、工具调用和图表生成。"
+  },
+  admin: {
+    eyebrow: "Access control",
+    title: "账号管理",
+    description: "管理账号角色与启用状态，查看登录和权限变更审计记录。"
   }
 };
 
@@ -150,7 +156,6 @@ function AuthView({
         <div className="auth-copy">
           <span>Account</span>
           <h1>{mode === "login" ? "登录工作台" : "创建本地账号"}</h1>
-          <p>账号用于隔离数据 session、模型版本和训练任务，并为后续队列、配额和权限管理提供基础。</p>
         </div>
         <div className="auth-tabs" role="tablist" aria-label="账号模式">
           <button className={mode === "login" ? "active" : ""} type="button" onClick={() => onModeChange("login")}>登录</button>
@@ -181,34 +186,6 @@ function AuthView({
     </main>
   );
 }
-
-const workflowCards = [
-  {
-    label: "01 / Upload",
-    title: "导入数据集",
-    text: "CSV/Excel 上传已接入现有 Flask session，刷新后可恢复最近数据。"
-  },
-  {
-    label: "02 / Explore",
-    title: "检查字段和质量",
-    text: "预览表、字段类型、缺失值和异常值概览已经迁移到 React。"
-  },
-  {
-    label: "03 / Clean",
-    title: "完整数据处理",
-    text: "行列筛选、类型转换、缺失值处理、缩放、编码、计算列和 PCA 已迁移到独立页面。"
-  },
-  {
-    label: "04 / Train",
-    title: "训练和预测模型",
-    text: "可视化、模型训练、版本列表、单条预测和批量预测已进入 React 工作台。"
-  },
-  {
-    label: "05 / LLM",
-    title: "大模型分析",
-    text: "Direct Chat、Agent Chat、流式输出、工具调用和图表结果迁移到 React。"
-  }
-];
 
 const modelLabels: Record<string, string> = {
   regression: "回归",
@@ -336,6 +313,13 @@ function App() {
   }, [sidebarCollapsed]);
 
   useEffect(() => {
+    if (user && user.role !== "admin" && activeView === "admin") {
+      setActiveView("home");
+      window.history.replaceState(null, "", "#home");
+    }
+  }, [activeView, user]);
+
+  useEffect(() => {
     if (!user) return;
     const controller = new AbortController();
     setError("");
@@ -426,6 +410,9 @@ function App() {
   const previewDisplayRows = previewRows;
   const previewColumns = profile?.columns.slice(0, 12) ?? [];
   const activeCopy = viewCopy[activeView];
+  const visibleNavItems = user.role === "admin"
+    ? [...navItems, { id: "admin" as const, label: "账号管理", detail: "Admin", icon: ShieldCheck }]
+    : navItems;
 
   const navigateView = (view: ViewId) => {
     setActiveView(view);
@@ -518,7 +505,7 @@ function App() {
 
         <nav className="nav-list" aria-label="功能模块">
           <div className="nav-label">Workspace</div>
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -539,10 +526,6 @@ function App() {
           })}
         </nav>
 
-        <div className="sidebar-note">
-          <strong>Phase 7</strong>
-          <span>数据处理和可视化页已迁移为独立 React 工作台，旧功能正在按页面补齐。</span>
-        </div>
       </aside>
 
       <main className="main">
@@ -553,14 +536,17 @@ function App() {
             <code>{API_BASE}</code>
           </div>
           <div className="topbar-actions">
-            <div className="user-chip" title={user.user_id}>{user.username}</div>
+            <div className="user-chip" title={user.user_id}>
+              {user.role === "admin" ? <ShieldCheck size={14} aria-hidden="true" /> : null}
+              {user.username}
+            </div>
             <button className="button ghost" type="button" onClick={() => setRefreshToken((value) => value + 1)}>
               <RefreshCcw size={15} aria-hidden="true" />
               刷新状态
             </button>
             <button className="button primary" type="button" onClick={() => fileInputRef.current?.click()}>
               <Play size={15} aria-hidden="true" />
-              上传数据
+              {profile ? "更换数据" : "上传数据"}
             </button>
             <button className="button ghost" type="button" onClick={handleLogout}>
               退出
@@ -569,26 +555,20 @@ function App() {
         </header>
 
         <section
-          className={["process", "visualize", "model", "llm"].includes(activeView) ? "workspace workspace-wide" : "workspace"}
+          className={["process", "visualize", "model", "llm", "admin"].includes(activeView) ? "workspace workspace-wide" : "workspace"}
           aria-labelledby="workspace-title"
         >
-          <div className="intro">
+          <div className="intro compact-intro">
             <div className="eyebrow">
               <Wand2 size={15} aria-hidden="true" />
               {activeCopy.eyebrow}
             </div>
             <h1 id="workspace-title">{activeCopy.title}</h1>
-            <p>{activeCopy.description}</p>
           </div>
 
           {(activeView === "home" || activeView === "upload") ? (
-          <section className="command-center" aria-label="工作台入口">
-            <div className="upload-panel">
-              <div className="upload-copy">
-                <div className="panel-kicker">Data entry</div>
-                <h2>上传 CSV 或 Excel，创建新的分析 session。</h2>
-                <p>成功后会显示字段、预览、缺失值、异常值和最近 session 状态。session id 会保存在浏览器中用于刷新恢复。</p>
-              </div>
+          <section className={profile ? "command-center has-data" : "command-center empty"} aria-label="数据导入">
+            <div className={profile ? "upload-panel data-loaded" : "upload-panel"}>
               <input
                 ref={fileInputRef}
                 className="file-input"
@@ -596,52 +576,62 @@ function App() {
                 accept=".csv,.xlsx,.xls"
                 onChange={handleFileChange}
               />
-              <button
-                className="upload-drop"
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || backendStatus === "offline"}
-              >
-                <FileSpreadsheet size={22} aria-hidden="true" />
-                <strong>{uploading ? "正在上传..." : "选择数据文件"}</strong>
-                <span>支持 .csv、.xlsx、.xls；默认最大 256 MB，实际限制由服务器配置。</span>
-              </button>
-              {uploadError ? <div className="inline-error">{uploadError}</div> : null}
-              {backendStatus === "offline" ? (
-                <div className="inline-warning">启动 Flask 后端后即可上传：cd backend && python app.py</div>
-              ) : null}
-            </div>
-
-            <div className="snapshot-panel">
-              <div className="snapshot-header">
-                <span>Current snapshot</span>
-                {profile ? <CheckCircle2 size={17} aria-hidden="true" /> : <Database size={17} aria-hidden="true" />}
-              </div>
               {profile ? (
-                <div className="uploaded-summary">
-                  <strong>{profile.session_meta?.source_name ?? "已上传数据"}</strong>
-                  <div className="snapshot-metrics">
-                    <span>{profile.n_rows.toLocaleString()} 行</span>
-                    <span>{profile.n_cols} 列</span>
-                    <span>{profile.numeric_cols.length} 数值列</span>
-                    <span>{riskColumns} 风险列</span>
+                <div className="loaded-dataset">
+                  <div className="loaded-dataset-title">
+                    <span><CheckCircle2 size={18} aria-hidden="true" /></span>
+                    <div>
+                      <small>当前数据集</small>
+                      <strong>{profile.session_meta?.source_name ?? "已上传数据"}</strong>
+                    </div>
                   </div>
-                  <div className="column-strip">
-                    {profile.columns.slice(0, 8).map((column) => (
-                      <span key={column}>{column}</span>
-                    ))}
-                    {profile.columns.length > 8 ? <span>+{profile.columns.length - 8}</span> : null}
+                  <div className="loaded-dataset-metrics">
+                    <span><strong>{profile.n_rows.toLocaleString()}</strong>行</span>
+                    <span><strong>{profile.n_cols}</strong>列</span>
+                    <span><strong>{profile.missing_total}</strong>缺失</span>
+                    <span><strong>{outlierTotal}</strong>异常</span>
+                  </div>
+                  <div className="loaded-dataset-actions">
+                    <button className="button ghost" type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                      <Upload size={15} aria-hidden="true" />{uploading ? "正在上传" : "更换文件"}
+                    </button>
+                    <button className="button primary" type="button" onClick={() => navigateView("upload")}>
+                      <Table2 size={15} aria-hidden="true" />查看全部数据
+                    </button>
                   </div>
                 </div>
               ) : (
-                <div className="empty-state">
-                  <strong>{profileLoading ? "正在恢复 session" : "等待数据"}</strong>
-                  <span>{profileLoading ? "正在读取上次上传的数据概览。" : "上传后这里会显示数据集概览和字段摘要。"}</span>
-                </div>
+                <button
+                  className="upload-drop"
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || backendStatus === "offline"}
+                >
+                  <FileSpreadsheet size={22} aria-hidden="true" />
+                  <strong>{uploading ? "正在上传..." : "选择数据文件"}</strong>
+                  <span>CSV / Excel · 最大 256 MB</span>
+                </button>
               )}
+              {uploadError ? <div className="inline-error">{uploadError}</div> : null}
+              {backendStatus === "offline" ? (
+                <div className="inline-warning">后端未连接</div>
+              ) : null}
             </div>
+
+            {profile ? <div className="snapshot-panel">
+              <div className="snapshot-header">
+                <span>字段</span>
+                <Database size={17} aria-hidden="true" />
+              </div>
+              <div className="column-strip">
+                {profile.columns.slice(0, 12).map((column) => <span key={column}>{column}</span>)}
+                {profile.columns.length > 12 ? <span>+{profile.columns.length - 12}</span> : null}
+              </div>
+            </div> : null}
           </section>
           ) : null}
+
+          {profile && activeView === "upload" ? <DataRowsBrowser sessionId={profile.session_id} /> : null}
 
           {activeView === "home" ? (
           <section className="status-grid" aria-label="项目状态">
@@ -770,6 +760,7 @@ function App() {
           {profile && activeView === "visualize" ? <DataVisualization profile={profile} /> : null}
           {profile && activeView === "model" ? <ModelWorkbench profile={profile} /> : null}
           {profile && activeView === "llm" ? <LlmWorkspace profile={profile} /> : null}
+          {activeView === "admin" && user.role === "admin" ? <AdminWorkspace currentUser={user} /> : null}
 
           {activeView === "home" ? (
           <>
@@ -835,27 +826,6 @@ function App() {
             </article>
           </section>
 
-          <section className="cards" aria-label="迁移流程">
-            {workflowCards.map((card) => (
-              <article className="card" key={card.label}>
-                <span>{card.label}</span>
-                <h2>{card.title}</h2>
-                <p>{card.text}</p>
-                <ChevronRight size={16} aria-hidden="true" />
-              </article>
-            ))}
-          </section>
-
-          <section className="baseline-panel" aria-label="基线检查">
-            <div>
-              <Activity size={18} aria-hidden="true" />
-              <strong>重构基线</strong>
-            </div>
-            <p>
-              旧前端、后端 API 和模型服务暂未删除。React 现在拥有第一条真实数据链路：
-              上传、预览、字段质量、session 恢复、完整数据处理、可视化、模型训练预测和 LLM 分析。
-            </p>
-          </section>
           </>
           ) : null}
         </section>

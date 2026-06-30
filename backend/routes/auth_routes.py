@@ -10,6 +10,7 @@ from auth_store import (
     login_retry_after,
     record_registration_attempt,
     record_login_failure,
+    record_audit_event,
     registration_retry_after,
     verify_user,
 )
@@ -72,12 +73,20 @@ def register():
     if err:
         return api_error("REGISTER_FAILED", err, 400)
     token = create_session(user)
+    record_audit_event(
+        "auth.register",
+        actor_user_id=user["user_id"],
+        target_user_id=user["user_id"],
+        source_ip=request.remote_addr,
+    )
     return _set_auth_cookie(jsonify({"user": user}), token)
 
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
     username, password = _credentials()
+    if len(username) > 40:
+        return api_error("LOGIN_FAILED", "用户名或密码不正确。", 401)
     login_key = _login_key(username)
     retry_after = login_retry_after(login_key)
     if retry_after:
@@ -85,17 +94,36 @@ def login():
     user = verify_user(username, password)
     if not user:
         retry_after = record_login_failure(login_key)
+        record_audit_event(
+            "auth.login_failed",
+            source_ip=request.remote_addr,
+            details={"username": username[:40]},
+        )
         if retry_after:
             return _rate_limit_response(retry_after)
         return api_error("LOGIN_FAILED", "用户名或密码不正确。", 401)
     clear_login_failures(login_key)
     token = create_session(user)
+    record_audit_event(
+        "auth.login",
+        actor_user_id=user["user_id"],
+        target_user_id=user["user_id"],
+        source_ip=request.remote_addr,
+    )
     return _set_auth_cookie(jsonify({"user": user}), token)
 
 
 @auth_bp.route("/logout", methods=["POST"])
 def logout():
+    user = current_user()
     delete_session(request.cookies.get(COOKIE_NAME))
+    if user:
+        record_audit_event(
+            "auth.logout",
+            actor_user_id=user["user_id"],
+            target_user_id=user["user_id"],
+            source_ip=request.remote_addr,
+        )
     response = jsonify({"status": "logged_out"})
     response.delete_cookie(COOKIE_NAME)
     return response
